@@ -79,6 +79,14 @@ a { color: var(--sand); }
 .dots i.on { background: var(--sand); }
 .players li.leader .dots i.on { background: var(--stamp); }
 
+/* 모드 선택 */
+.modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; background: var(--ink-2); padding: 6px; border-radius: var(--radius); }
+.modes button { padding: 10px 8px; background: transparent; color: var(--paper-dim); font-weight: 500; border-radius: 10px; }
+.modes button.on { background: var(--paper); color: var(--ink); font-weight: 700; }
+.modes button:disabled { opacity: 1; cursor: default; }
+.modes button:disabled:not(.on) { opacity: .5; }
+.mode-note { font-size: 13px; color: var(--paper-dim); margin: 6px 0 0; }
+
 /* 게임 */
 .topbar { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; }
 .stage { position: relative; min-height: 280px; display: grid; place-items: center; text-align: center; margin: 8px 0 4px; }
@@ -163,6 +171,14 @@ a { color: var(--sand); }
     </div>
     <ul class="players" id="lobby-players"></ul>
   </div>
+  <div>
+    <div class="modes" id="modes" role="radiogroup" aria-label="단어 길이 모드">
+      <button type="button" data-len="0" class="on" role="radio" aria-checked="true">자유</button>
+      <button type="button" data-len="2" role="radio" aria-checked="false">두글자</button>
+      <button type="button" data-len="3" role="radio" aria-checked="false">세글자</button>
+    </div>
+    <p class="mode-note" id="mode-note">2글자 이상이면 어떤 길이든 인정됩니다</p>
+  </div>
   <button type="button" id="btn-start" disabled>2명 이상 모이면 시작할 수 있어요</button>
   <p class="muted small">규칙: 한글 2글자 이상의 명사만 인정됩니다. 한 판에서 같은 단어는 한 번만. 틀리면 1초 쉬어야 합니다.</p>
 </section>
@@ -170,7 +186,7 @@ a { color: var(--sand); }
 <!-- 3. 게임 -->
 <section id="screen-game" class="screen">
   <div class="topbar">
-    <span><span id="game-round">1</span>번째 제시어</span>
+    <span><span id="game-round">1</span>번째 제시어 <span class="muted" id="game-mode"></span></span>
     <span class="muted" id="game-code"></span>
   </div>
   <div class="stage">
@@ -273,6 +289,7 @@ a { color: var(--sand); }
     $('btn-start').disabled = !(isHost && ready);
     $('btn-start').textContent = !ready ? '2명 이상 모이면 시작할 수 있어요' : isHost ? '게임 시작' : '방장이 시작하길 기다리는 중';
     $('game-round').textContent = s.round || 1;
+    renderMode(s.word_length || 0, isHost);
 
     if (s.phase === 'lobby') show('lobby');
     else if (s.phase === 'game_over') show('over');
@@ -287,6 +304,16 @@ a { color: var(--sand); }
     }
   }
 
+  const MODE_NOTES = { 0: '2글자 이상이면 어떤 길이든 인정됩니다', 2: '정확히 두 글자인 단어만 인정됩니다 (예: 부산)', 3: '정확히 세 글자인 단어만 인정됩니다 (예: 부동산)' };
+  function renderMode(len, isHost) {
+    document.querySelectorAll('#modes button').forEach(b => {
+      const on = Number(b.dataset.len) === len;
+      b.classList.toggle('on', on); b.setAttribute('aria-checked', on); b.disabled = !isHost;
+    });
+    $('mode-note').textContent = MODE_NOTES[len] + (isHost ? '' : ' · 방장이 고릅니다');
+    $('game-mode').textContent = len ? `· ${len === 2 ? '두글자' : '세글자'} 모드` : '';
+    $('word').placeholder = len === 2 ? '두 글자 단어' : len === 3 ? '세 글자 단어' : '이 글자로 시작하는 단어';
+  }
   function renderPlayers(ul, players, hostId, target) {
     const top = Math.max(...players.map(p => p.score), 0);
     ul.innerHTML = players.map(p => `
@@ -312,7 +339,8 @@ a { color: var(--sand); }
   function onRoundStart(m) {
     $('game-round').textContent = m.round;
     setPrompt(m.prompt, true); setInput(true); runTimer((m.round_seconds || roundSeconds) * 1000);
-    $('hint').textContent = `‘${m.prompt}’로 시작하는 단어를 입력하세요`;
+    const len = room?.word_length || 0;
+    $('hint').textContent = `‘${m.prompt}’로 시작하는 ${len === 2 ? '두 글자 ' : len === 3 ? '세 글자 ' : ''}단어를 입력하세요`;
     $('word').focus();
   }
   function onRoundEnd(m) {
@@ -372,6 +400,7 @@ a { color: var(--sand); }
     connect({ type: 'join_room', code: c, nickname: n });
   });
   $('btn-start').addEventListener('click', () => send({ type: 'start_game' }));
+  $('modes').addEventListener('click', (e) => { const b = e.target.closest('button[data-len]'); if (b && !b.disabled) send({ type: 'set_mode', word_length: Number(b.dataset.len) }); });
   $('btn-restart').addEventListener('click', () => send({ type: 'restart_game' }));
   $('answer-form').addEventListener('submit', (e) => {
     e.preventDefault(); const w = $('word').value.trim(); if (!w) return;

@@ -120,3 +120,10 @@ async def test_local_dictionary(tmp_path):
     assert (await local.is_noun("신문")).valid
     assert not (await local.is_noun("부자")).valid
     assert local.name == "local"
+
+
+async def test_local_prompt_syllables_by_length():
+    local = LocalDictionary({"부산", "부모", "부동산", "신발", "신문", "신호등"})
+    assert local.prompt_syllables(2) == {"부", "신"}
+    assert local.prompt_syllables(3) == set()  # 길이 3 단어가 음절당 1개뿐
+    assert local.prompt_syllables(0) is None

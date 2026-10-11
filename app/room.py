@@ -29,6 +29,9 @@ Sleep = Callable[[float], Awaitable[None]]
 MAX_WORD_LEN = 20
 MAX_NICKNAME_LEN = 12
 
+# 단어 길이 모드: 0 = 자유(2글자 이상), 2 = 두글자만, 3 = 세글자만
+WORD_LENGTH_MODES = {0: "자유", 2: "두글자", 3: "세글자"}
+
 
 class RoomError(Exception):
     """플레이어에게 그대로 보여 줄 수 있는 오류 메시지."""
@@ -76,6 +79,7 @@ class Room:
         self.used_prompts: set[str] = set()
         self.empty_since: float | None = None
         self.round_ends_at: float | None = None
+        self.word_length = 0  # WORD_LENGTH_MODES 의 키
 
         self._dictionary = dictionary
         self._settings = settings
@@ -141,6 +145,8 @@ class Room:
             "round": self.round_no,
             "prompt": self.prompt if self.phase in ("playing", "round_end") else None,
             "used_words": sorted(self.used_words),
+            "word_length": self.word_length,
+            "mode_label": WORD_LENGTH_MODES[self.word_length],
             "target_score": self._settings.target_score,
             "round_seconds": self._settings.round_seconds,
             "dictionary_mode": self._dictionary.name,
@@ -163,6 +169,21 @@ class Room:
             raise RoomError(f"{self._settings.min_players}명 이상 모여야 시작할 수 있습니다")
         self.phase = "countdown"
         self._loop_task = asyncio.ensure_future(self._game_loop())
+
+    async def set_mode(self, player_id: str, word_length: int) -> None:
+        if player_id != self.host_id:
+            raise RoomError("방장만 모드를 바꿀 수 있습니다")
+        if self.phase != "lobby":
+            raise RoomError("모드는 로비에서만 바꿀 수 있습니다")
+        if word_length not in WORD_LENGTH_MODES:
+            raise RoomError("지원하지 않는 모드입니다")
+        self.word_length = word_length
+        await self._broadcast(self.state())
+
+    def _prompt_pool(self) -> set[str] | None:
+        """현재 모드에서 쓸 수 있는 제시어 집합. None이면 전체 목록."""
+        pool = self._dictionary.prompt_syllables(self.word_length)
+        return pool or None
 
     async def restart(self, player_id: str) -> None:
         if player_id != self.host_id:
@@ -219,7 +240,7 @@ class Room:
 
         # 제시어 공개
         self.round_no += 1
-        self.prompt = self._picker.next(self.used_prompts)
+        self.prompt = self._picker.next(self.used_prompts, pool=self._prompt_pool())
         self.used_prompts.add(self.prompt)
         self.phase = "playing"
         self.round_ends_at = self._clock() + self._settings.round_seconds
@@ -281,6 +302,9 @@ class Room:
         word = normalize(str(raw_word)[:MAX_WORD_LEN])
         if not is_hangul_word(word):
             await self._reject(player, "한글 2글자 이상의 단어만 인정됩니다")
+            return
+        if self.word_length and len(word) != self.word_length:
+            await self._reject(player, f"{WORD_LENGTH_MODES[self.word_length]} 단어만 인정됩니다")
             return
         if not word.startswith(self.prompt or ""):
             await self._reject(player, f"'{self.prompt}'(으)로 시작해야 합니다")

@@ -38,6 +38,10 @@ class Dictionary(Protocol):
 
     async def is_noun(self, word: str) -> Verdict: ...
 
+    def prompt_syllables(self, word_length: int) -> set[str] | None:
+        """해당 길이의 단어가 충분한 첫 음절 집합. 알 수 없으면 None(전체 목록 사용)."""
+        ...
+
 
 class StdictClient:
     """표준국어대사전 오픈 API로 '명사 표제어' 존재 여부를 확인한다."""
@@ -80,6 +84,9 @@ class StdictClient:
             return Verdict(valid=True)
         return Verdict(valid=False, reason=REASON_NOT_NOUN)
 
+    def prompt_syllables(self, word_length: int) -> set[str] | None:
+        return None  # 실제 사전은 모든 음절에 단어가 충분하다고 본다
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
@@ -121,6 +128,9 @@ class CachedDictionary:
                 self.save()
         return verdict
 
+    def prompt_syllables(self, word_length: int) -> set[str] | None:
+        return self.inner.prompt_syllables(word_length)
+
     def save(self) -> None:
         if self._path is None:
             return
@@ -161,6 +171,16 @@ class LocalDictionary:
         if word in self._words:
             return Verdict(valid=True)
         return Verdict(valid=False, reason=REASON_NOT_FOUND)
+
+    def prompt_syllables(self, word_length: int, min_words: int = 2) -> set[str] | None:
+        """시드 목록에서 해당 길이 단어가 min_words개 이상인 첫 음절만 돌려준다."""
+        if word_length <= 0:
+            return None
+        counts: dict[str, int] = {}
+        for w in self._words:
+            if len(w) == word_length:
+                counts[w[0]] = counts.get(w[0], 0) + 1
+        return {s for s, n in counts.items() if n >= min_words}
 
 
 def build_dictionary(settings) -> Dictionary:

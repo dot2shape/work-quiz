@@ -63,6 +63,12 @@ class Hub:
                         await room.submit(player.id, str(msg.get("word", "")))
                     elif mtype == "restart_game":
                         await room.restart(player.id)
+                    elif mtype == "set_mode":
+                        try:
+                            length = int(msg.get("word_length", 0))
+                        except (TypeError, ValueError):
+                            raise RoomError("지원하지 않는 모드입니다")
+                        await room.set_mode(player.id, length)
                     elif mtype == "ping":
                         await ws.send_json({"type": "pong"})
                     else:

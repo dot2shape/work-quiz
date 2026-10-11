@@ -19,7 +19,7 @@ class SequentialPicker:
         self._order = list(order)
         self._i = 0
 
-    def next(self, used):
+    def next(self, used, pool=None):
         s = self._order[self._i % len(self._order)]
         self._i += 1
         return s
@@ -187,3 +187,36 @@ async def test_room_full():
         h.room.add_player(f"p{i}")
     with pytest.raises(RoomError):
         h.room.add_player("p9")
+
+
+async def test_word_length_mode_rejects_other_lengths():
+    h = Harness()
+    a = h.room.add_player("철수")
+    b = h.room.add_player("영희")
+    with pytest.raises(RoomError):
+        await h.room.set_mode(b.id, 2)  # 방장이 아님
+    with pytest.raises(RoomError):
+        await h.room.set_mode(a.id, 4)  # 지원하지 않는 길이
+    await h.room.set_mode(a.id, 3)
+    assert h.room.state()["word_length"] == 3 and h.room.state()["mode_label"] == "세글자"
+    await h.room.start(a.id)
+    with pytest.raises(RoomError):
+        await h.room.set_mode(a.id, 2)  # 로비가 아님
+    await wait_phase(h.room, "playing")
+    assert h.room.prompt == "부"
+    await h.room.submit(b.id, "부산")
+    assert h.results_for(b.id)[-1]["reason"] == "세글자 단어만 인정됩니다"
+    h.room.close()
+
+
+async def test_restart_keeps_mode():
+    h = Harness(target_score=1)
+    a = h.room.add_player("철수")
+    h.room.add_player("영희")
+    await h.room.set_mode(a.id, 2)
+    await h.room.start(a.id)
+    await wait_phase(h.room, "playing")
+    await h.room.submit(a.id, "부산")
+    await wait_phase(h.room, "game_over")
+    await h.room.restart(a.id)
+    assert h.room.word_length == 2

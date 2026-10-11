@@ -29,6 +29,8 @@ class PromptPicker:
         self._rng = rng or random.Random()
         self._syllables = list(syllables or PROMPT_SYLLABLES)
 
-    def next(self, used: set[str]) -> str:
-        candidates = [s for s in self._syllables if s not in used] or self._syllables
+    def next(self, used: set[str], pool: set[str] | None = None) -> str:
+        """pool이 주어지면 그 안의 음절만 쓴다(단어 길이 모드별 제한)."""
+        base = [s for s in self._syllables if pool is None or s in pool] or self._syllables
+        candidates = [s for s in base if s not in used] or base
         return self._rng.choice(candidates)
