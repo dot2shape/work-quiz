@@ -46,7 +46,7 @@ uv run pytest
 pm2 start ecosystem.config.cjs && pm2 save
 ```
 
-`~/.cloudflared/config.yml` ingress에 `quiz.ooo.codes → http://localhost:5020`을 추가하고
+`~/.cloudflared/config.yml` ingress에 `quiz.ooo.codes → http://localhost:5020`을 추가하고 (현재 `dev-dashboard` 터널에 등록됨, launchd `com.cloudflared.dev-dashboard` 재시작 필요)
 `cloudflared tunnel route dns <tunnel> quiz.ooo.codes`로 DNS를 연결합니다.
 
 ## 문서

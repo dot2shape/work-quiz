@@ -4,9 +4,8 @@ module.exports = {
     {
       name: "word-rush",
       cwd: __dirname,
-      script: "/opt/homebrew/bin/uv",
-      args: "run uvicorn app.main:app --host 127.0.0.1 --port 5020 --proxy-headers --forwarded-allow-ips='*'",
-      interpreter: "none",
+      script: "scripts/start.sh",
+      interpreter: "bash",
       autorestart: true,
       max_restarts: 10,
       out_file: "logs/out.log",
