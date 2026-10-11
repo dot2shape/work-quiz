@@ -18,7 +18,7 @@ async def noop_send(pid, msg):
 
 def test_create_get_sweep():
     mgr = RoomManager(Settings(empty_room_ttl_seconds=600), LocalDictionary(set()))
-    room = mgr.create(broadcast=noop_broadcast, send=noop_send)
+    room = mgr.create(lambda code: (noop_broadcast, noop_send))
     assert mgr.get(room.code.lower()) is room
     p = room.add_player("철수")
     room.disconnect(p.id)

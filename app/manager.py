@@ -23,12 +23,14 @@ class RoomManager:
         self._dictionary = dictionary
         self.rooms: dict[str, Room] = {}
 
-    def create(self, broadcast: Callable[[dict], Awaitable[None]], send: Callable[[str, dict], Awaitable[None]]) -> Room:
+    def create(self, callbacks_for: Callable[[str], tuple[Callable[[dict], Awaitable[None]], Callable[[str, dict], Awaitable[None]]]]) -> Room:
+        """방 코드를 발급하고, 코드로 만든 (broadcast, send) 콜백을 방에 연결한다."""
         if len(self.rooms) >= self._settings.max_rooms:
             raise RoomError("지금은 방을 더 만들 수 없습니다. 잠시 후 다시 시도해 주세요")
         code = generate_code()
         while code in self.rooms:
             code = generate_code()
+        broadcast, send = callbacks_for(code)
         room = Room(code, self._dictionary, self._settings, broadcast=broadcast, send=send)
         self.rooms[code] = room
         return room
