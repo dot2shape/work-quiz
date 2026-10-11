@@ -114,8 +114,9 @@ async def test_cache_persists_to_file(tmp_path):
 
 async def test_local_dictionary(tmp_path):
     f = tmp_path / "words.txt"
-    f.write_text("# 주석\n부산\n신발\n\n", encoding="utf-8")
+    f.write_text("# 주석\n부산 신문\n신발\n\n", encoding="utf-8")
     local = LocalDictionary.from_file(f)
     assert (await local.is_noun("부산")).valid
+    assert (await local.is_noun("신문")).valid
     assert not (await local.is_noun("부자")).valid
     assert local.name == "local"

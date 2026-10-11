@@ -151,8 +151,10 @@ class LocalDictionary:
         words: set[str] = set()
         for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
-            if line and not line.startswith("#"):
-                words.add(normalize(line))
+            if not line or line.startswith("#"):
+                continue
+            for token in line.split():  # 한 줄에 여러 단어를 공백으로 나열할 수 있다
+                words.add(normalize(token))
         return cls(words)
 
     async def is_noun(self, word: str) -> Verdict:
