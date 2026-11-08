@@ -14,7 +14,7 @@ src/index.ts        Worker 진입점: /healthz, /ws → 방 Durable Object, 그 
 src/room-object.ts  RoomObject (Durable Object): 소켓 관리, 메시지 라우팅, 빈 방 정리(alarm)
 src/room.ts         방 상태 머신 (lobby → countdown → playing → round_end → game_over)
 src/arbiter.ts      선착순 판정기 (앞 순번 미해결이면 뒤 순번 보류)
-src/dictionary.ts   StdictClient / CachedDictionary(메모리+KV) / LocalDictionary(시드)
+src/dictionary.ts   StdictClient / CachedDictionary(메모리+KV) / LocalDictionary(시드) / FallbackDictionary(조회 실패 폴백)
 src/prompts.ts      제시어 음절 목록과 추출기
 src/hangul.ts       한글 형식 검증
 data/seed_words.txt API 키가 없을 때 쓰는 로컬 사전
@@ -45,6 +45,8 @@ npm run tail                                # 실시간 로그
 - 계정·라우트·바인딩은 `wrangler.toml` 에 있습니다. `wrangler login` 된 상태여야 합니다.
 - 공개 호스트 `quiz.ooo.codes` 의 DNS 는 기존 cloudflared 터널 CNAME 을 그대로 두고 **Workers 라우트**가 먼저 가로챕니다. 터널·pm2 는 더 이상 이 서비스에 관여하지 않습니다.
 - 키가 비어 있으면 `data/seed_words.txt` 로 판정하는 **로컬 사전 모드**로 동작하며 로비에 배지가 표시됩니다. 키를 넣는 즉시(재배포 없이) 표준국어대사전 판정으로 바뀝니다.
+- 키가 있어도 stdict 조회가 실패하면(HTTP 오류·빈 본문·timeout 등) 거절하지 않고 로컬 사전으로 판정합니다. 2회 연속 실패하면 60초 동안 stdict 호출을 건너뜁니다(방별). 폴백 판정은 KV 에 캐시하지 않습니다. 키가 틀리면 stdict 는 HTTP 200 + 빈 본문을 돌려주므로 Workers Logs 의 `stdict 조회 실패` 로그 `kind:"empty"` 로 구분됩니다.
+- `/healthz` 의 `dictionary`: `local`(키 없음) / `stdict`(정상) / `stdict-degraded`(조회 실패, 로컬 사전 폴백 중 — 탐침 결과 60초 캐시)
 
 ### 사전 API 키
 
