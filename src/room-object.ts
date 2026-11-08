@@ -6,7 +6,7 @@
  * - 플레이어·점수는 메모리에만 두고(원본 FastAPI 판과 동일), 소켓이 하나라도 살아 있으면 객체가 유지된다.
  * - 전원 퇴장: 로비면 즉시 삭제, 게임 중이면 TTL 뒤 알람으로 삭제한다.
  */
-import { CachedDictionary, type Dictionary, LocalDictionary, StdictClient } from "./dictionary";
+import { CachedDictionary, type Dictionary, FallbackDictionary, LocalDictionary, StdictClient } from "./dictionary";
 import type { Env } from "./env";
 import { type Message, type Player, Room, RoomError } from "./room";
 import { loadSettings } from "./settings";
@@ -20,10 +20,13 @@ interface Attachment {
 }
 
 export function buildDictionary(env: Env): Dictionary {
+  const local = LocalDictionary.fromText(seedWords);
   if (env.STDICT_API_KEY?.trim()) {
-    return new CachedDictionary(new StdictClient(env.STDICT_API_KEY.trim()), env.DICT_CACHE);
+    // stdict 조회 실패 시 거절하지 않고 로컬 사전으로 폴백한다(#9). 폴백 판정은 KV 에 캐시되지 않는다.
+    const stdict = new CachedDictionary(new StdictClient(env.STDICT_API_KEY.trim()), env.DICT_CACHE);
+    return new FallbackDictionary(stdict, local);
   }
-  return LocalDictionary.fromText(seedWords);
+  return local;
 }
 
 export class RoomObject implements DurableObject {
