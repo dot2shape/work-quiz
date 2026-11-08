@@ -4,6 +4,7 @@
  * - StdictClient      : 국립국어원 표준국어대사전 오픈 API 호출
  * - CachedDictionary  : 메모리 + KV 캐시 (오류 결과는 캐시하지 않음)
  * - LocalDictionary   : 로컬 시드 단어 목록 (API 키가 없을 때 개발용)
+ * - FallbackDictionary: 주 사전 조회 실패 시 로컬 사전으로 판정 + 서킷 브레이커
  */
 import { normalize } from "./hangul";
 
@@ -27,6 +28,14 @@ export interface Dictionary {
 }
 
 type Fetch = typeof fetch;
+
+/** stdict 응답이 판정에 쓸 수 없는 형태일 때(진단용 분류). */
+class StdictFailure extends Error {
+  constructor(readonly kind: "http" | "empty" | "parse") {
+    super(kind);
+    this.name = "StdictFailure";
+  }
+}
 
 interface StdictItem {
   word?: string;
@@ -54,14 +63,32 @@ export class StdictClient implements Dictionary {
       num: "50",
     });
     let data: { channel?: { item?: StdictItem | StdictItem[] } };
+    const started = Date.now();
+    let status = 0;
+    let head = "";
     try {
       const resp = await this.fetchImpl(`${STDICT_URL}?${params}`, {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      data = await resp.json();
+      status = resp.status;
+      const body = await resp.text();
+      head = body.slice(0, 120);
+      if (!resp.ok) throw new StdictFailure("http");
+      // 키가 틀리거나 없으면 stdict는 HTTP 200 + 빈 본문을 돌려준다(2026-11-08 #9 확인).
+      if (!body.trim()) throw new StdictFailure("empty");
+      try {
+        data = JSON.parse(body);
+      } catch {
+        throw new StdictFailure("parse");
+      }
     } catch (err) {
-      console.warn("stdict 조회 실패", word, String(err));
+      // 요청 URL은 key 가 들어 있어 남기지 않는다.
+      const e = err as Error;
+      const kind = err instanceof StdictFailure ? err.kind : e?.name === "TimeoutError" ? "timeout" : "network";
+      console.warn(
+        "stdict 조회 실패",
+        JSON.stringify({ word, kind, status, ms: Date.now() - started, error: e?.name, head }),
+      );
       return { valid: false, reason: REASON_LOOKUP_FAILED, error: true };
     }
 
@@ -181,5 +208,88 @@ export class LocalDictionary implements Dictionary {
       if ([...w].length === wordLength) counts.set(w[0], (counts.get(w[0]) ?? 0) + 1);
     }
     return new Set([...counts].filter(([, n]) => n >= minWords).map(([s]) => s));
+  }
+}
+
+export type DictionaryStatus = "stdict" | "stdict-degraded";
+
+export interface FallbackOptions {
+  /** 이 횟수만큼 연속 실패하면 차단(open)한다. */
+  failureThreshold?: number;
+  /** 차단 후 주 사전을 다시 시도하기까지의 시간. */
+  cooldownMs?: number;
+  now?: () => number;
+}
+
+/**
+ * 주 사전(stdict) 조회가 실패(`error: true`)하면 거절 대신 로컬 사전으로 판정한다.
+ * 연속 실패 시 cooldown 동안 주 사전 호출을 건너뛰어 제출마다 타임아웃을 기다리지 않게 한다.
+ * 폴백 판정은 주 사전 바깥에서 만들어지므로 CachedDictionary(KV)에 저장되지 않는다.
+ */
+export class FallbackDictionary implements Dictionary {
+  readonly name: string;
+  private failures = 0;
+  private openUntil = 0;
+  private readonly failureThreshold: number;
+  private readonly cooldownMs: number;
+  private readonly now: () => number;
+
+  constructor(
+    readonly primary: Dictionary,
+    readonly fallback: Dictionary,
+    options: FallbackOptions = {},
+  ) {
+    this.name = primary.name;
+    this.failureThreshold = options.failureThreshold ?? 2;
+    this.cooldownMs = options.cooldownMs ?? 60_000;
+    this.now = options.now ?? Date.now;
+  }
+
+  get status(): DictionaryStatus {
+    return this.failures >= this.failureThreshold ? "stdict-degraded" : "stdict";
+  }
+
+  async isNoun(word: string): Promise<Verdict> {
+    if (this.failures >= this.failureThreshold && this.now() < this.openUntil) {
+      return this.fallback.isNoun(word);
+    }
+    const verdict = await this.primary.isNoun(word);
+    if (!verdict.error) {
+      this.failures = 0;
+      this.openUntil = 0;
+      return verdict;
+    }
+    this.failures += 1;
+    if (this.failures >= this.failureThreshold) {
+      if (this.failures === this.failureThreshold) console.warn("stdict 차단: 로컬 사전으로 폴백", this.cooldownMs);
+      this.openUntil = this.now() + this.cooldownMs;
+    }
+    return this.fallback.isNoun(word);
+  }
+
+  promptSyllables(wordLength: number): Set<string> | null {
+    return this.status === "stdict-degraded"
+      ? this.fallback.promptSyllables(wordLength)
+      : this.primary.promptSyllables(wordLength);
+  }
+}
+
+/** /healthz 용: 알려진 단어로 stdict 를 탐침해 실제 상태를 보고한다(결과는 ttlMs 동안 캐시). */
+export class StdictHealth {
+  private cached: { at: number; status: DictionaryStatus } | null = null;
+
+  constructor(
+    private readonly client: Dictionary,
+    private readonly ttlMs = 60_000,
+    private readonly now: () => number = Date.now,
+    private readonly probeWord = "사과",
+  ) {}
+
+  async status(): Promise<DictionaryStatus> {
+    if (this.cached && this.now() - this.cached.at < this.ttlMs) return this.cached.status;
+    const verdict = await this.client.isNoun(this.probeWord);
+    const status: DictionaryStatus = verdict.error ? "stdict-degraded" : "stdict";
+    this.cached = { at: this.now(), status };
+    return status;
   }
 }

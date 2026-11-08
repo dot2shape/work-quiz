@@ -4,11 +4,22 @@
  * 클라이언트는 `/ws` (새 방) 또는 `/ws?code=ABC234` (기존 방) 로 접속한 뒤
  * 첫 메시지로 create_room / join_room 을 보낸다(원본 프로토콜 그대로).
  */
+import { StdictClient, StdictHealth } from "./dictionary";
 import { type Env, generateCode, normalizeCode } from "./env";
 
 export { RoomObject } from "./room-object";
 
 const CODE_PATTERN = /^[A-Z2-9]{6}$/;
+
+let health: { key: string; probe: StdictHealth } | null = null;
+
+/** "local"(키 없음) | "stdict"(정상) | "stdict-degraded"(조회 실패 → 로컬 사전 폴백 중). */
+async function dictionaryStatus(env: Env): Promise<string> {
+  const key = env.STDICT_API_KEY?.trim();
+  if (!key) return "local";
+  if (health?.key !== key) health = { key, probe: new StdictHealth(new StdictClient(key)) };
+  return health.probe.status();
+}
 
 async function pickFreeCode(env: Env): Promise<string> {
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -47,7 +58,7 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/ws") return handleWebSocket(request, env);
     if (url.pathname === "/healthz") {
-      return Response.json({ ok: true, dictionary: env.STDICT_API_KEY?.trim() ? "stdict" : "local", runtime: "cloudflare" });
+      return Response.json({ ok: true, dictionary: await dictionaryStatus(env), runtime: "cloudflare" });
     }
     return env.ASSETS.fetch(request);
   },
