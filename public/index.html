@@ -241,7 +241,9 @@ a { color: var(--sand); }
     pendingAction = firstMessage;
     if (ws && ws.readyState <= 1) { if (ws.readyState === 1) send(firstMessage); return; }
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${proto}://${location.host}/ws`);
+    // 기존 방은 코드를 URL에 실어 해당 방(Durable Object)으로 바로 연결한다. 새 방은 서버가 코드를 발급한다.
+    const query = firstMessage?.type === 'join_room' && firstMessage.code ? `?code=${encodeURIComponent(firstMessage.code)}` : '';
+    ws = new WebSocket(`${proto}://${location.host}/ws${query}`);
     ws.onopen = () => { if (pendingAction) { send(pendingAction); pendingAction = null; } };
     ws.onmessage = (ev) => { try { handle(JSON.parse(ev.data)); } catch (e) { console.error(e); } };
     ws.onclose = () => {

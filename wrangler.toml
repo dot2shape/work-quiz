@@ -1,0 +1,43 @@
+# 첫글자 배틀 — Cloudflare Workers 설정
+name = "word-rush"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+account_id = "ae9532a236b56ad08edef5c447122eb4"
+
+# 공개 호스트. 기존 DNS(터널 CNAME)를 그대로 두고 라우트로 가로챈다.
+routes = [
+  { pattern = "quiz.ooo.codes/*", zone_name = "ooo.codes" },
+]
+
+# 빌드 없는 단일 페이지 클라이언트
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# 시드 단어 목록을 문자열 모듈로 import 한다
+[[rules]]
+type = "Text"
+globs = ["**/*.txt"]
+fallthrough = true
+
+# 방 1개 = Durable Object 1개 (SQLite 백엔드: 무료 플랜 가능)
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "RoomObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomObject"]
+
+# 사전 판정 캐시 (오류 결과는 저장하지 않음)
+[[kv_namespaces]]
+binding = "DICT_CACHE"
+id = "2eea3ac3bc70412ba15685a898aabdb5"
+
+# 게임 규칙 기본값. STDICT_API_KEY 는 `wrangler secret put STDICT_API_KEY` 로만 넣는다.
+[vars]
+TARGET_SCORE = "5"
+ROUND_SECONDS = "20"
+
+[observability]
+enabled = true
