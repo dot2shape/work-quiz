@@ -1,77 +1,71 @@
-# 첫글자 배틀 (Word Rush)
+# 🐰 첫글자 배틀 (Word Rush)
 
-제시어 한 음절(예: **부**)이 공개되면, 그 글자로 시작하는 **표준국어대사전 명사**를 가장 먼저 제출한 사람이 1점을 얻습니다. 5점을 먼저 얻으면 승리. 2~8명이 한 방에서 실시간으로 겨루는 웹 게임입니다.
+> 글자 하나가 뿅! 나타나면, 그 글자로 시작하는 단어를 **제일 먼저** 외치는 사람이 이겨요 ⚡
 
-**https://quiz.ooo.codes** — Cloudflare 에서 상시 운영됩니다(개인 PC 불필요).
+친구들과 한 방에 모여 실시간으로 겨루는 한국어 단어 순발력 게임이에요.
+설치도, 가입도 없이 링크만 열면 바로 시작! 👉 **[quiz.ooo.codes](https://quiz.ooo.codes)**
 
-- 서버: Cloudflare Workers + Durable Objects (방 1개 = 객체 1개, WebSocket, 점수는 메모리)
-- 클라이언트: 빌드 없는 `public/index.html` 한 장 (Workers Static Assets)
-- 판정: 국립국어원 표준국어대사전 오픈 API + KV 캐시. 승자는 **서버 도착 순서**로 결정합니다.
+---
 
-## 구조
+## 🎮 이렇게 놀아요
 
-```
-src/index.ts        Worker 진입점: /healthz, /ws → 방 Durable Object, 그 외 정적 자산
-src/room-object.ts  RoomObject (Durable Object): 소켓 관리, 메시지 라우팅, 빈 방 정리(alarm)
-src/room.ts         방 상태 머신 (lobby → countdown → playing → round_end → game_over)
-src/arbiter.ts      선착순 판정기 (앞 순번 미해결이면 뒤 순번 보류)
-src/dictionary.ts   StdictClient / CachedDictionary(메모리+KV) / LocalDictionary(시드)
-src/prompts.ts      제시어 음절 목록과 추출기
-src/hangul.ts       한글 형식 검증
-data/seed_words.txt API 키가 없을 때 쓰는 로컬 사전
-public/index.html   클라이언트
-test/               vitest 단위 테스트
-```
+### 1. 닉네임을 정하고 방 만들기
 
-## 개발
+귀여운 닉네임을 적고 **새 방 만들기**를 눌러요. 친구가 만든 방이 있다면 방 코드 6자리를 넣고 **입장**!
 
-```bash
-npm install
-npm run dev          # http://localhost:8787 — 두 탭을 열어 바로 대전
-npm test             # vitest
-npm run typecheck
-```
+<img src="docs/screenshots/01-enter.png" alt="입장 화면: 닉네임 입력과 새 방 만들기" width="420">
 
-로컬에서 실제 사전 판정을 쓰려면 `.dev.vars` 파일에 `STDICT_API_KEY=...` 를 넣습니다(gitignore 됨).
+### 2. 로비에서 친구 기다리기 👯
 
-## 배포
+방 코드나 링크를 친구에게 보내 주세요. 2명 이상 모이면 방장이 **게임 시작**을 누를 수 있어요. (최대 8명)
 
-```bash
-npm run deploy                              # wrangler deploy → quiz.ooo.codes/* 라우트
-npx wrangler secret put STDICT_API_KEY      # 사전 API 키 (1회, 값은 프롬프트에 입력)
-npm run tail                                # 실시간 로그
-```
+<img src="docs/screenshots/02-lobby.png" alt="로비: 방 코드와 참가자 목록" width="420">
 
-- 계정·라우트·바인딩은 `wrangler.toml` 에 있습니다. `wrangler login` 된 상태여야 합니다.
-- 공개 호스트 `quiz.ooo.codes` 의 DNS 는 기존 cloudflared 터널 CNAME 을 그대로 두고 **Workers 라우트**가 먼저 가로챕니다. 터널·pm2 는 더 이상 이 서비스에 관여하지 않습니다.
-- 키가 비어 있으면 `data/seed_words.txt` 로 판정하는 **로컬 사전 모드**로 동작하며 로비에 배지가 표시됩니다. 키를 넣는 즉시(재배포 없이) 표준국어대사전 판정으로 바뀝니다.
+방장은 로비에서 **단어 길이 모드**도 고를 수 있어요 — 자유 / 두글자 / 세글자 ✨
 
-### 사전 API 키
+<img src="docs/screenshots/07-lobby-modes.png" alt="로비: 세글자 모드를 고른 모습" width="420">
 
-1. https://stdict.korean.go.kr/openapi/openApiInfo.do 에서 회원가입 후 오픈 API 키를 신청합니다(즉시 발급).
-2. `npx wrangler secret put STDICT_API_KEY` 를 실행하고 프롬프트에 키를 붙여 넣습니다. 키는 채팅·커밋·파일에 절대 넣지 않습니다.
+### 3. 두근두근 카운트다운 ⏳
 
-## 규칙
+3, 2, 1… 이때는 입력이 잠겨 있어요. 손가락 풀고 준비!
 
-| 항목 | 값 |
+<img src="docs/screenshots/03-countdown.png" alt="카운트다운 화면" width="420">
+
+### 4. 제시어 등장! 빨리 입력하기 ⌨️
+
+글자가 나오면 그 글자로 시작하는 **명사**를 입력하고 엔터! 20초 안에 아무도 못 맞히면 다음 글자로 넘어가요.
+
+<img src="docs/screenshots/04-prompt.png" alt="제시어 '미'에 '미술'을 입력하는 모습" width="420">
+
+### 5. 득점 쾅! 🎯
+
+가장 먼저 인정된 단어에 도장이 쾅 찍히고 1점을 얻어요. 한 번 나온 단어는 그 판에서 다시 못 써요.
+
+<img src="docs/screenshots/05-round-end.png" alt="'미술'로 득점한 결과 화면" width="420">
+
+### 6. 5점 먼저 모으면 우승 🏆
+
+먼저 5점을 모은 사람이 우승! 방장이 **한 판 더**를 누르면 같은 방에서 계속 놀 수 있어요.
+
+<img src="docs/screenshots/06-game-over.png" alt="우승자 발표 화면" width="420">
+
+---
+
+## 📋 규칙 한눈에 보기
+
+| 항목 | 규칙 |
 |---|---|
-| 인정 조건 | 한글 2글자 이상, 제시어로 시작, 사전에 명사로 등재 |
-| 중복 | 한 판에서 득점한 단어는 재사용 불가 |
-| 오답 | 제출자에게만 사유 표시, 1초 쿨다운 |
-| 라운드 | 3초 카운트다운 → 최대 20초 → 3초 결과 표시 |
-| 승리 | 5점 선취 |
-| 단어 길이 모드 | 자유(2글자 이상) / 두글자 / 세글자 — 방장이 로비에서 선택 |
+| 🙆 인정 | 제시어로 시작하는 한글 2글자 이상 명사 |
+| 🔁 중복 | 한 판에서 나온 단어는 다시 못 써요 |
+| 🙅 오답 | 1초 동안 쉬어야 해요 |
+| ⏱️ 라운드 | 카운트다운 3초 → 최대 20초 |
+| 🏆 승리 | 5점 먼저 모으기 |
+| 📏 길이 모드 | 자유 · 두글자 · 세글자 (방장이 선택) |
 
-`wrangler.toml` 의 `[vars]` `TARGET_SCORE`, `ROUND_SECONDS` 로 조정합니다.
+같은 순간에 냈다면? 서버에 **먼저 도착한** 단어가 이겨요. 손이 빠른 사람이 최고! 🐇💨
 
-## 운영 특성 (Durable Objects)
+---
 
-- 방 코드는 Durable Object 이름입니다. 만들어진 방만 `created` 플래그가 있어 임의 코드 접속은 거부됩니다.
-- 전원 퇴장 시 로비면 즉시 삭제, 게임 중이면 10분 뒤 alarm 으로 삭제됩니다.
-- 플레이어·점수는 메모리에만 있습니다. 재배포 시 진행 중인 게임은 끊기고, 클라이언트는 토큰으로 재접속하지만 새 플레이어로 들어옵니다.
+지금 바로 친구를 불러 보세요 👉 **[quiz.ooo.codes](https://quiz.ooo.codes)**
 
-## 문서
-
-- 설계 스펙: `docs/superpowers/specs/2026-10-11-word-rush-design.md`
-- Cloudflare 이전 설계: `docs/superpowers/specs/2026-10-15-cloudflare-migration-design.md`
-- 구현 계획(초판): `docs/superpowers/plans/2026-10-11-word-rush.md`
+<sub>개발자용 실행·배포 안내는 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)에 있어요.</sub>
