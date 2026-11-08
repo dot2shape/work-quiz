@@ -1,17 +1,11 @@
-# 환경변수 — 실제 키는 절대 커밋하지 않는다
+# 환경변수 — 실제 키는 절대 커밋하지 않는다 (프로덕션 키는 wrangler secret 으로만)
 .env*
 !.env.example
+.dev.vars*
 
-# Python
-__pycache__/
-*.pyc
-.venv/
-.pytest_cache/
-*.egg-info/
-
-# 런타임 데이터
-data/dict_cache.json
-logs/
+# Node / wrangler
+node_modules/
+.wrangler/
 
 # OS
 .DS_Store

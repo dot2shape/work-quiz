@@ -2,10 +2,12 @@
 
 제시어 한 음절로 시작하는 표준국어대사전 명사를 가장 먼저 제출하면 득점하는 실시간 멀티플레이 웹 게임.
 
-- 서버: FastAPI + WebSocket (방·점수 메모리 보관), 클라이언트: `static/index.html` 단일 페이지
-- 판정: 국립국어원 표준국어대사전 오픈 API(`STDICT_API_KEY`, `.env`) / 키 없으면 `data/seed_words.txt` 로컬 사전 모드
-- 운영: Cloudflare Workers + Durable Objects (`quiz.ooo.codes`)
-- 실행·규칙 상세는 `README.md`
+- 스택: TypeScript · Cloudflare Workers(`src/index.ts`) + Durable Objects(`RoomObject`, 방 1개 = DO 1개, WebSocket) + KV(`DICT_CACHE`, 사전 판정 캐시)
+- 클라이언트: 빌드 없는 `public/index.html` 단일 페이지 (Workers Assets)
+- 판정: 국립국어원 표준국어대사전 오픈 API(`STDICT_API_KEY` — 운영은 `wrangler secret`, 로컬은 `.dev.vars`) / 키 없으면 `data/seed_words.txt` 로컬 사전 모드
+- 설정: `wrangler.toml` (라우트 `quiz.ooo.codes/*`, 바인딩, `[vars]` 게임 규칙)
+- 실행: `npm ci` → `npm run dev`(localhost:8787) · `npm test`(vitest) · `npm run typecheck` · 배포 `npx wrangler deploy`
+- 실행·규칙 상세는 `README.md`, 이전 설계는 `docs/superpowers/specs/2026-10-15-cloudflare-migration-design.md`
 
 ## 세션 구조 (PO → 워커)
 
