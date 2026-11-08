@@ -21,3 +21,7 @@
 - 새 기능·방향 변경 아이디어를 PO가 받으면 PRD를 쓰지 않고 원문을 `INTAKE` 터미널에 직접 전달한다. 사용자에게 옮기라고 하지 않는다.
 - 배정: `po` 스킬 3단계에 따라 프로젝트가 지정한 명령으로 워커를 기동하고 `orca terminal show`의 `agentIdentity`를 확인한 뒤 작업을 전달한다. 워커도 PO Provider를 따라야 하는지는 프로젝트 AGENTS.md와 사용자 지정을 따른다.
 - 워크트리·브랜치 이름은 `issue-N`. PR 본문에 `Closes #N`.
+
+### 이 프로젝트 전용 규칙 (사용자 지정, 2026-11-08)
+- **사람 승인 없이 바로 `main`**: PR에 `## 사용자 확인`을 두지 않는다. Monitor가 `status:verified`를 붙이면 PO가 즉시 병합하고 운영(`npx wrangler deploy`)에 반영한 뒤 결과만 보고한다. 사용자 PR Approve를 기다리지 않는다.
+- 운영은 Cloudflare Workers(`quiz.ooo.codes`). 브라우저 검증은 `ego-browser`만 사용한다.
