@@ -1,5 +1,10 @@
 # 첫글자 배틀 (Word Rush) — 설계 스펙
 
+> **⚠️ 구버전(FastAPI) 문서 — 보관용**
+> 이 문서는 Python(FastAPI + uvicorn, pm2·cloudflared) 시절의 기록이다. 현재 운영은 Cloudflare Workers + Durable Objects(TypeScript)이며,
+> 서버 구조·실행·배포는 이 문서가 아니라 `docs/DEVELOPMENT.md`와 `docs/superpowers/specs/2026-10-15-cloudflare-migration-design.md`를 따른다.
+> 게임 규칙·메시지 프로토콜 설계 배경을 참고할 때만 읽는다.
+
 작성일: 2026-10-11 · 상태: 승인됨(브레인스토밍 결과 반영)
 
 ## 1. 한 줄 정의
