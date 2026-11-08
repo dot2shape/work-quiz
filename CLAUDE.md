@@ -7,7 +7,7 @@
 - 판정: 국립국어원 표준국어대사전 오픈 API(`STDICT_API_KEY` — 운영은 `wrangler secret`, 로컬은 `.dev.vars`) / 키 없으면 `data/seed_words.txt` 로컬 사전 모드
 - 설정: `wrangler.toml` (라우트 `quiz.ooo.codes/*`, 바인딩, `[vars]` 게임 규칙)
 - 실행: `npm ci` → `npm run dev`(localhost:8787) · `npm test`(vitest) · `npm run typecheck` · 배포 `npx wrangler deploy`
-- 실행·규칙 상세는 `README.md`, 이전 설계는 `docs/superpowers/specs/2026-10-15-cloudflare-migration-design.md`
+- 게임 소개는 `README.md`, 실행·배포·규칙 상세는 `docs/DEVELOPMENT.md`, 이전 설계는 `docs/superpowers/specs/2026-10-15-cloudflare-migration-design.md`
 
 ## 세션 구조 (PO → 워커)
 
