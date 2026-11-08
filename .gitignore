@@ -15,3 +15,10 @@ logs/
 
 # OS
 .DS_Store
+
+# PO 운영 (워커 워크트리·로컬 세션 상태)
+/issue-*/
+.worktrees/
+.po/review-assets/
+.po/monitor.json
+.po/intake.json
