@@ -54,8 +54,34 @@ function publicOf(p: Player): PublicPlayer {
   return { id: p.id, nickname: p.nickname, score: p.score, connected: p.connected };
 }
 
+/** 끝난 라운드 한 개의 기록. 정답 없이 시간 초과로 끝나면 word·winner_* 가 null 이다. */
+export interface HistoryEntry {
+  round: number;
+  prompt: string;
+  word: string | null;
+  winner_id: string | null;
+  /** 맞힌 시점의 닉네임. 플레이어가 나가도 결과표에 이름이 남도록 함께 저장한다. */
+  winner_name: string | null;
+}
+
+export interface WordCount {
+  word: string;
+  count: number;
+}
+
+/** 히스토리의 정답 단어별 사용 횟수. 횟수 내림차순 → 가나다순. */
+export function countWords(history: readonly HistoryEntry[]): WordCount[] {
+  const counts = new Map<string, number>();
+  for (const { word } of history) if (word !== null) counts.set(word, (counts.get(word) ?? 0) + 1);
+  return [...counts]
+    .map(([word, count]) => ({ word, count }))
+    // 완성형 한글 음절은 코드 포인트 순서가 곧 가나다순이다
+    .sort((a, b) => b.count - a.count || (a.word < b.word ? -1 : a.word > b.word ? 1 : 0));
+}
+
 interface RoundResult {
   winnerId: string | null;
+  winnerName: string | null;
   word: string | null;
   done: Promise<void>;
   finish: () => void;
@@ -67,7 +93,7 @@ function newRoundResult(): RoundResult {
   const done = new Promise<void>((resolve) => {
     finish = resolve;
   });
-  const result: RoundResult = { winnerId: null, word: null, done, finished: false, finish: () => {} };
+  const result: RoundResult = { winnerId: null, winnerName: null, word: null, done, finished: false, finish: () => {} };
   result.finish = () => {
     result.finished = true;
     finish();
@@ -114,6 +140,8 @@ export class Room {
   emptySince: number | null = null;
   roundEndsAt: number | null = null;
   wordLength = 0; // WORD_LENGTH_MODES 의 키
+  allowDuplicates = false; // true 면 이미 나온 단어를 누구나 다시 내도 정답이다
+  readonly history: HistoryEntry[] = []; // 이번 게임에서 끝난 라운드 기록
 
   private readonly picker: Picker;
   private readonly sleep: Sleep;
@@ -203,11 +231,19 @@ export class Room {
       used_words: [...this.usedWords].sort(),
       word_length: this.wordLength,
       mode_label: WORD_LENGTH_MODES[this.wordLength],
+      allow_duplicates: this.allowDuplicates,
       target_score: this.settings.targetScore,
       round_seconds: this.settings.roundSeconds,
       dictionary_mode: this.dictionary.name,
       remaining_ms: this.remainingMs(),
+      // 결과표는 게임이 끝난 뒤에만 공개한다. 새로고침·재접속해도 같은 표를 그릴 수 있게 state 에 담는다.
+      ...(this.phase === "game_over" ? this.results() : { history: null, word_counts: null }),
     };
+  }
+
+  /** 게임 종료 결과표: 라운드 히스토리와 단어별 사용 횟수. */
+  private results(): { history: HistoryEntry[]; word_counts: WordCount[] } {
+    return { history: this.history.map((entry) => ({ ...entry })), word_counts: countWords(this.history) };
   }
 
   private publicPlayers(): PublicPlayer[] {
@@ -240,6 +276,13 @@ export class Room {
     await this.broadcast(this.state());
   }
 
+  async setAllowDuplicates(playerId: string, allow: boolean): Promise<void> {
+    if (playerId !== this.hostId) throw new RoomError("방장만 중복 허용 설정을 바꿀 수 있습니다");
+    if (this.phase !== "lobby") throw new RoomError("중복 허용 설정은 로비에서만 바꿀 수 있습니다");
+    this.allowDuplicates = allow;
+    await this.broadcast(this.state());
+  }
+
   /** 현재 모드에서 쓸 수 있는 제시어 집합. null이면 전체 목록. */
   private promptPool(): Set<string> | null {
     const pool = this.dictionary.promptSyllables(this.wordLength);
@@ -261,6 +304,7 @@ export class Room {
     this.prompt = null;
     this.usedWords.clear();
     this.usedPrompts.clear();
+    this.history.length = 0; // allowDuplicates 는 wordLength 처럼 다음 게임에도 유지한다
     this.roundEndsAt = null;
     for (const p of this.players.values()) {
       p.score = 0;
@@ -336,6 +380,13 @@ export class Room {
     this.roundEndsAt = null;
 
     // 라운드 종료
+    this.history.push({
+      round: this.roundNo,
+      prompt: this.prompt,
+      word: round.word,
+      winner_id: round.winnerId,
+      winner_name: round.winnerName,
+    });
     this.phase = "round_end";
     await this.broadcast({
       type: "round_end",
@@ -349,7 +400,13 @@ export class Room {
     const winner = round.winnerId ? this.players.get(round.winnerId) : undefined;
     if (winner && winner.score >= this.settings.targetScore) {
       this.phase = "game_over";
-      await this.broadcast({ type: "game_over", winner_id: winner.id, players: this.publicPlayers() });
+      await this.broadcast({
+        type: "game_over",
+        winner_id: winner.id,
+        players: this.publicPlayers(),
+        allow_duplicates: this.allowDuplicates,
+        ...this.results(),
+      });
     }
   }
 
@@ -381,7 +438,7 @@ export class Room {
       await this.reject(player, `'${this.prompt}'(으)로 시작해야 합니다`);
       return;
     }
-    if (this.usedWords.has(word)) {
+    if (!this.allowDuplicates && this.usedWords.has(word)) {
       await this.reject(player, "이미 나온 단어입니다");
       return;
     }
@@ -417,6 +474,7 @@ export class Room {
     player.score += 1;
     this.usedWords.add(sub.word);
     round.winnerId = player.id;
+    round.winnerName = player.nickname;
     round.word = sub.word;
     await this.send(player.id, { type: "submit_result", accepted: true, word: sub.word });
     round.finish();
