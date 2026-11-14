@@ -4,7 +4,7 @@
  * - StdictClient      : 국립국어원 표준국어대사전 오픈 API 호출
  * - CachedDictionary  : 메모리 + KV 캐시 (오류 결과는 캐시하지 않음)
  * - LocalDictionary   : 로컬 시드 단어 목록 (API 키가 없을 때 개발용)
- * - FallbackDictionary: 주 사전 조회 실패 시 로컬 사전으로 판정 + 서킷 브레이커(방 간 공유)
+ * - FallbackDictionary: 주 사전 조회 실패 시 로컬 사전에 있으면 인정, 없으면 재시도 안내 + 서킷 브레이커(방 간 공유)
  * - TieredDictionary  : 자체 DB(D1) → 없거나 조회 오류면 기존 경로
  * - BlocklistDictionary: 어떤 사전이든 판정 앞에서 차단 단어를 거절
  */
@@ -15,6 +15,8 @@ export const STDICT_URL = "https://stdict.korean.go.kr/api/search.do";
 export const REASON_NOT_FOUND = "사전에 없는 단어입니다";
 export const REASON_NOT_NOUN = "명사가 아닙니다";
 export const REASON_LOOKUP_FAILED = "사전 조회에 실패했습니다. 다시 제출해 주세요";
+/** 주 사전에 묻지 못했고 시드에도 없을 때: 없는 단어로 확정하지 않고 다시 내게 한다(쿨다운 없음, #24). */
+export const REASON_LOOKUP_DELAYED = "사전 조회가 지연되고 있습니다. 다시 제출해 주세요";
 export const REASON_BANNED = "사용할 수 없는 단어입니다";
 
 export interface Verdict {
@@ -289,7 +291,9 @@ export interface FallbackOptions {
 const KV_MIN_TTL_SECONDS = 60;
 
 /**
- * 주 사전(stdict) 조회가 실패(`error: true`)하면 거절 대신 로컬 사전으로 판정한다.
+ * 주 사전(stdict) 조회가 실패(`error: true`)하면 로컬 사전에 있는 단어는 인정한다.
+ * 로컬 사전에도 없으면 "없는 단어"로 확정하지 않고 재시도 안내(`REASON_LOOKUP_DELAYED`, `error: true`)를
+ * 돌려준다 — 실제 단어일 수 있으므로 호출부(Room)가 쿨다운을 주지 않는다(#24).
  * 연속 실패 시 cooldown 동안 주 사전 호출을 건너뛰어 제출마다 타임아웃을 기다리지 않게 한다.
  * - 차단 상태는 KV 플래그(`shared`)로 방 간에 공유한다: 새 방이 같은 실패를 다시 겪지 않는다.
  * - 차단 중에도 주 사전의 캐시(KV)에 남은 판정은 먼저 쓰고, 없을 때만 로컬 사전으로 판정한다.
@@ -349,14 +353,20 @@ export class FallbackDictionary implements Dictionary {
       if (!wasTripped) console.warn("stdict 차단: 로컬 사전으로 폴백", this.breaker.cooldownMs);
       await this.publish(openUntil);
     }
-    return this.fallback.isNoun(word);
+    return this.unverified(word);
   }
 
   /** 차단 중: 주 사전의 캐시에 남은 판정이 있으면 그것을, 없으면 로컬 사전을 쓴다. */
   private async whileOpen(word: string): Promise<Verdict> {
     const peek = (this.primary as { peek?: (word: string) => Promise<Verdict | null> }).peek;
     const cached = peek ? await peek.call(this.primary, word) : null;
-    return cached ?? this.fallback.isNoun(word);
+    return cached ?? this.unverified(word);
+  }
+
+  /** 주 사전에 묻지 못한 단어: 로컬 사전에 있으면 인정하고, 없으면 확정 거절 대신 재시도를 안내한다. */
+  private async unverified(word: string): Promise<Verdict> {
+    const verdict = await this.fallback.isNoun(word);
+    return verdict.valid ? verdict : { valid: false, reason: REASON_LOOKUP_DELAYED, error: true };
   }
 
   private async publish(openUntil: number): Promise<void> {

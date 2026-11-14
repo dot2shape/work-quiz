@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { REASON_BANNED, REASON_NOT_FOUND } from "../src/dictionary";
+import { REASON_BANNED, REASON_LOOKUP_DELAYED, REASON_NOT_FOUND } from "../src/dictionary";
 import { buildDictionary } from "../src/dictionary-build";
 import type { Env } from "../src/env";
 import { createDatabases, load, loadFixture, migrate, runSql } from "./helpers/d1";
@@ -124,7 +124,7 @@ describe("buildDictionary — stdict 경로", () => {
     expect(await dict.isNoun("저고리")).toEqual({ valid: true });
   });
 
-  it("D1 에 없는 단어는 stdict 로, stdict 가 실패하면 시드로 판정한다", async () => {
+  it("D1 에 없는 단어는 stdict 로, stdict 가 실패하면 시드로 판정한다(시드에도 없으면 재시도 안내)", async () => {
     const { fetchImpl, state } = fakeStdict(["저고리"]);
     const dict = await buildDictionary(envOf({ STDICT_API_KEY: "k", DICT_DB: dbs.full }), SEED, { fetchImpl });
     expect(dict.name).toBe("d1");
@@ -134,7 +134,7 @@ describe("buildDictionary — stdict 경로", () => {
     expect(dict.promptSyllables(2)).toBeNull(); // stdict 정상: 모든 음절
     state.fail = true;
     expect(await dict.isNoun("강아지")).toEqual({ valid: true }); // 시드
-    expect(await dict.isNoun("저승사자")).toEqual({ valid: false, reason: REASON_NOT_FOUND });
+    expect(await dict.isNoun("저승사자")).toEqual({ valid: false, reason: REASON_LOOKUP_DELAYED, error: true }); // #24
   });
 
   it("차단은 stdict 경로에도 적용된다: stdict 가 명사로 인정해도 거절한다", async () => {
