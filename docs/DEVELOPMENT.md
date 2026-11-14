@@ -14,7 +14,7 @@ src/index.ts        Worker 진입점: /healthz, /ws → 방 Durable Object, 그 
 src/room-object.ts  RoomObject (Durable Object): 소켓 관리, 메시지 라우팅, 빈 방 정리(alarm)
 src/room.ts         방 상태 머신 (lobby → countdown → playing → round_end → game_over)
 src/arbiter.ts      선착순 판정기 (앞 순번 미해결이면 뒤 순번 보류)
-src/dictionary.ts   StdictClient / CachedDictionary(메모리+KV) / LocalDictionary(시드) / FallbackDictionary(조회 실패 폴백)
+src/dictionary.ts   StdictClient / CachedDictionary(메모리+KV) / LocalDictionary(시드) / FallbackDictionary(조회 실패 시 시드 인정·재시도 안내)
                     / TieredDictionary(D1 → 기존 경로) / BlocklistDictionary(차단 층)
 src/d1-dictionary.ts  D1Dictionary, DO 초기화 때 읽는 스냅숏(loadD1Snapshot), /healthz 용 D1Health
 src/dictionary-build.ts  방 하나가 쓸 사전 조립 (buildDictionary)
@@ -60,7 +60,8 @@ npm run tail                                # 실시간 로그
 - 계정·라우트·바인딩은 `wrangler.toml` 에 있습니다. `wrangler login` 된 상태여야 합니다.
 - 공개 호스트 `quiz.ooo.codes` 의 DNS 는 기존 cloudflared 터널 CNAME 을 그대로 두고 **Workers 라우트**가 먼저 가로챕니다. 터널·pm2 는 더 이상 이 서비스에 관여하지 않습니다.
 - 키가 비어 있으면 `data/seed_words.txt` 로 판정하는 **로컬 사전 모드**로 동작하며 로비에 배지가 표시됩니다. 키를 넣는 즉시(재배포 없이) 표준국어대사전 판정으로 바뀝니다.
-- 키가 있어도 stdict 조회가 실패하면(HTTP 오류·빈 본문·timeout 등) 거절하지 않고 로컬 사전으로 판정합니다. 2회 연속 실패하면 60초 동안 stdict 호출을 건너뜁니다(방별). 폴백 판정은 KV 에 캐시하지 않습니다. 키가 틀리면 stdict 는 HTTP 200 + 빈 본문을 돌려주므로 Workers Logs 의 `stdict 조회 실패` 로그 `kind:"empty"` 로 구분됩니다.
+- 키가 있어도 stdict 조회가 실패하면(HTTP 오류·빈 본문·timeout 등) 시드 목록에 있는 단어는 인정합니다. 시드에도 없으면 "사전에 없는 단어"로 확정하지 않고 "사전 조회가 지연되고 있습니다. 다시 제출해 주세요"로 안내하며 쿨다운을 주지 않습니다(#24, 차단 중에도 같음). 2회 연속 실패하면 60초 동안 stdict 호출을 건너뜁니다(방별). 폴백 판정은 KV 에 캐시하지 않습니다. 키가 틀리면 stdict 는 HTTP 200 + 빈 본문을 돌려주므로 Workers Logs 의 `stdict 조회 실패` 로그 `kind:"empty"` 로 구분됩니다.
+- stdict 조회 한도는 5초이고, 1.5초 안에 응답이 없으면 두 번째 요청을 병행해 먼저 온 성공 응답으로 판정합니다(`src/dictionary.ts` 의 `STDICT_TIMEOUT_MS`·`STDICT_HEDGE_AFTER_MS`). 병행으로 회복한 조회는 `stdict 조회 지연`(`attempts`·`winner`), 끝내 실패한 조회는 `stdict 조회 실패`(`kind`·`ms`·`attempts`) 로그로 남습니다. 방(DO) 안의 로그는 `wrangler tail` 에 바로 나오지 않고, 방이 정리될 때(전원 퇴장 약 10분 뒤) 마지막으로 접속한 소켓의 이벤트에 묶여 나옵니다.
 - stdict 차단 상태는 KV 플래그(`breaker:stdict`, TTL 60초)로 방 간에 공유합니다. 새 방은 같은 실패를 다시 겪지 않고, 차단 중에도 KV 에 캐시된 예전 stdict 판정은 먼저 씁니다.
 - `/healthz` 의 `dictionary`: `d1`(자체 DB 판정) / `local`(키 없음) / `stdict`(정상) / `stdict-degraded`(조회 실패, 로컬 사전 폴백 중 — 탐침 결과 60초 캐시). `d1` 일 때 `fallback` 에 뒤의 세 값 중 하나가 따로 나옵니다.
 - `/healthz` 의 `d1`: `{status, standard, slang, banned}`. `status` 는 `unbound`(바인딩 없음) / `error`(조회 실패·마이그레이션 전) / `empty`(인정 단어 0 → 기존 경로) / `ready`(D1 판정 사용). 60초 캐시.
@@ -104,7 +105,7 @@ node scripts/dict/load.mjs --recalc-only --remote                               
 |---|---|
 | 인정 조건 | 한글 2글자 이상, 제시어로 시작, 사전에 명사로 등재 |
 | 중복 | 한 판에서 득점한 단어는 재사용 불가 |
-| 오답 | 제출자에게만 사유 표시, 1초 쿨다운 |
+| 오답 | 제출자에게만 사유 표시, 1초 쿨다운 (사전 조회 실패로 인한 재시도 안내는 쿨다운 없음) |
 | 라운드 | 3초 카운트다운 → 최대 20초 → 3초 결과 표시 |
 | 승리 | 5점 선취 |
 | 단어 길이 모드 | 자유(2글자 이상) / 두글자 / 세글자 — 방장이 로비에서 선택 |

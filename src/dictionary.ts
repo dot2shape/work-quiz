@@ -34,11 +34,34 @@ export interface Dictionary {
 
 type Fetch = typeof fetch;
 
-/** stdict 응답이 판정에 쓸 수 없는 형태일 때(진단용 분류). */
+/**
+ * stdict 조회 한도(#24). 운영 측정(2026-11-15): 방(DO) 안에서 조회 38건 중 4건이 3초 안에 끝나지 않았고
+ * (첫 조회만이 아님), 같은 단어를 다시 조회하면 정상이었다. 그래서 늦는 요청을 기다리기만 하지 않고
+ * `STDICT_HEDGE_AFTER_MS` 뒤에 두 번째 요청을 병행해, 전체 한도 안에 먼저 온 성공 응답으로 판정한다.
+ */
+export const STDICT_TIMEOUT_MS = 5000;
+export const STDICT_HEDGE_AFTER_MS = 1500;
+
+/** stdict 응답이 판정에 쓸 수 없는 형태일 때(진단용 분류). `head` 는 키를 가린 응답 앞부분이다. */
 class StdictFailure extends Error {
-  constructor(readonly kind: "http" | "empty" | "parse") {
+  constructor(
+    readonly kind: "http" | "empty" | "parse",
+    readonly status = 0,
+    readonly head = "",
+  ) {
     super(kind);
     this.name = "StdictFailure";
+  }
+}
+
+/** 보낸 요청이 모두 실패했다. `errors` 는 보낸 순서, `timedOut` 은 전체 한도를 넘겼는지다. */
+class StdictLookupError extends Error {
+  constructor(
+    readonly errors: unknown[],
+    readonly timedOut: boolean,
+  ) {
+    super("stdict lookup failed");
+    this.name = "StdictLookupError";
   }
 }
 
@@ -53,6 +76,10 @@ interface StdictItem {
   pos?: string;
 }
 
+interface StdictData {
+  channel?: { item?: StdictItem | StdictItem[] };
+}
+
 /** 표준국어대사전 오픈 API로 '명사 표제어' 존재 여부를 확인한다. */
 export class StdictClient implements Dictionary {
   readonly name = "stdict";
@@ -61,7 +88,10 @@ export class StdictClient implements Dictionary {
     private readonly apiKey: string,
     // 전역 fetch 를 필드에 담아 this.fetchImpl(...) 로 부르면 Workers 에서 Illegal invocation 이 난다(#19).
     private readonly fetchImpl: Fetch = (input, init) => fetch(input, init),
-    private readonly timeoutMs = 3000,
+    /** 조회 전체 한도. 넘으면 조회 실패(`kind: "timeout"`)다. */
+    private readonly timeoutMs = STDICT_TIMEOUT_MS,
+    /** 첫 요청이 이 시간 안에 끝나지 않으면 두 번째 요청을 병행한다. 0 이거나 한도 이상이면 병행하지 않는다. */
+    private readonly hedgeAfterMs = STDICT_HEDGE_AFTER_MS,
   ) {}
 
   async isNoun(word: string): Promise<Verdict> {
@@ -74,33 +104,36 @@ export class StdictClient implements Dictionary {
       type1: "word", // 어휘만 (구·관용구·속담 제외)
       num: "50",
     });
-    let data: { channel?: { item?: StdictItem | StdictItem[] } };
+    let data: StdictData;
     const started = Date.now();
-    let status = 0;
-    let head = "";
     try {
-      const resp = await this.fetchImpl(`${STDICT_URL}?${params}`, {
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-      status = resp.status;
-      const body = await resp.text();
-      // 본문 전체에서 키를 가린 뒤 자른다(먼저 자르면 경계에 걸린 키 조각이 남는다).
-      head = maskKey(body, this.apiKey).slice(0, 120);
-      if (!resp.ok) throw new StdictFailure("http");
-      // 키가 틀리거나 없으면 stdict는 HTTP 200 + 빈 본문을 돌려준다(2026-11-08 #9 확인).
-      if (!body.trim()) throw new StdictFailure("empty");
-      try {
-        data = JSON.parse(body);
-      } catch {
-        throw new StdictFailure("parse");
+      const result = await this.lookup(`${STDICT_URL}?${params}`);
+      data = result.data;
+      if (result.attempts > 1) {
+        // 병행 요청으로 회복한 지연. 빈도와 어느 요청이 이겼는지를 Workers Logs 로 확인할 수 있게 남긴다.
+        console.warn(
+          "stdict 조회 지연",
+          JSON.stringify({ word, ms: Date.now() - started, attempts: result.attempts, winner: result.winner }),
+        );
       }
     } catch (err) {
       // 요청 URL은 key 가 들어 있어 남기지 않는다.
-      const e = err as Error;
-      const kind = err instanceof StdictFailure ? err.kind : e?.name === "TimeoutError" ? "timeout" : "network";
+      const errors = err instanceof StdictLookupError ? err.errors : [err];
+      const timedOut = err instanceof StdictLookupError && err.timedOut;
+      const failure = errors.find((x): x is StdictFailure => x instanceof StdictFailure);
+      const e = (timedOut ? errors.find((x) => !(x instanceof StdictFailure)) : null) ?? (errors[0] as Error);
+      const kind = timedOut ? "timeout" : e instanceof StdictFailure ? e.kind : "network";
       console.warn(
         "stdict 조회 실패",
-        JSON.stringify({ word, kind, status, ms: Date.now() - started, error: e?.name, head }),
+        JSON.stringify({
+          word,
+          kind,
+          status: failure?.status ?? 0,
+          ms: Date.now() - started,
+          error: (e as Error)?.name,
+          head: failure?.head ?? "",
+          attempts: errors.length,
+        }),
       );
       return { valid: false, reason: REASON_LOOKUP_FAILED, error: true };
     }
@@ -116,6 +149,57 @@ export class StdictClient implements Dictionary {
       return pos.includes("명사") && !pos.includes("대명사");
     });
     return noun ? { valid: true } : { valid: false, reason: REASON_NOT_NOUN };
+  }
+
+  /**
+   * 요청을 보내고, 늦으면 두 번째 요청을 병행해 먼저 온 성공 응답을 돌려준다.
+   * - 첫 요청이 병행 전에 실패하면(HTTP 오류·빈 본문 등) 다시 보내지 않는다: 키 오류 같은 실패는 재요청해도 같다.
+   * - 병행한 뒤에는 하나가 실패해도 다른 하나를 전체 한도까지 기다린다.
+   * 끝나면 남은 요청은 취소한다.
+   */
+  private async lookup(url: string): Promise<{ data: StdictData; attempts: number; winner: number }> {
+    const deadline = AbortSignal.timeout(this.timeoutMs);
+    const cancels: AbortController[] = [];
+    const attempt = (winner: number) => {
+      const cancel = new AbortController();
+      cancels.push(cancel);
+      return this.request(url, AbortSignal.any([deadline, cancel.signal])).then((data) => ({ data, winner }));
+    };
+    let hedgeTimer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const first = attempt(1);
+      if (!(this.hedgeAfterMs > 0 && this.hedgeAfterMs < this.timeoutMs)) return { ...(await first), attempts: 1 };
+      const hedge = new Promise<null>((resolve) => {
+        hedgeTimer = setTimeout(() => resolve(null), this.hedgeAfterMs);
+      });
+      const early = await Promise.race([first, hedge]);
+      if (early) return { ...early, attempts: 1 };
+      return { ...(await Promise.any([first, attempt(2)])), attempts: 2 };
+    } catch (err) {
+      // 런타임에 따라 한도 초과가 TimeoutError 가 아닌 취소 오류로 올 수 있어 한도 신호를 함께 본다.
+      const errors: unknown[] = err instanceof AggregateError ? err.errors : [err];
+      const timedOut = deadline.aborted || errors.some((e) => (e as Error)?.name === "TimeoutError");
+      throw new StdictLookupError(errors, timedOut);
+    } finally {
+      if (hedgeTimer !== null) clearTimeout(hedgeTimer);
+      for (const cancel of cancels) cancel.abort();
+    }
+  }
+
+  /** 요청 한 번. 판정에 쓸 수 없는 응답은 StdictFailure 로 던진다. */
+  private async request(url: string, signal: AbortSignal): Promise<StdictData> {
+    const resp = await this.fetchImpl(url, { signal });
+    const body = await resp.text();
+    // 본문 전체에서 키를 가린 뒤 자른다(먼저 자르면 경계에 걸린 키 조각이 남는다).
+    const head = maskKey(body, this.apiKey).slice(0, 120);
+    if (!resp.ok) throw new StdictFailure("http", resp.status, head);
+    // 키가 틀리거나 없으면 stdict는 HTTP 200 + 빈 본문을 돌려준다(2026-11-08 #9 확인).
+    if (!body.trim()) throw new StdictFailure("empty", resp.status, head);
+    try {
+      return JSON.parse(body) as StdictData;
+    } catch {
+      throw new StdictFailure("parse", resp.status, head);
+    }
   }
 
   promptSyllables(): Set<string> | null {
