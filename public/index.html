@@ -89,8 +89,21 @@ a { color: var(--sand); }
 .modes button:disabled:not(.on) { opacity: .5; }
 .mode-note { font-size: 13px; color: var(--paper-dim); margin: 6px 0 0; }
 
+/* 중복 단어 허용 스위치: 줄 전체가 버튼이다. 방장이 아니면 disabled 로 잠그되 현재 값은 또렷이 보이게 둔다 */
+.switch-row { width: 100%; display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 12px 14px; background: var(--ink-2); color: var(--paper); font-weight: 500; text-align: left; }
+.switch-row .switch-text { flex: 1; min-width: 0; display: grid; }
+.switch-row .switch-note { font-size: 13px; font-weight: 400; color: var(--paper-dim); }
+.switch-row .switch-state { flex: none; font-size: 13px; color: var(--paper-dim); }
+.switch-row[aria-checked=true] .switch-state { color: var(--sand); font-weight: 700; }
+.switch-row .track { flex: none; display: block; position: relative; width: 46px; height: 26px; border-radius: 999px; background: rgba(247,243,232,.22); transition: background .15s; }
+.switch-row .track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--paper); transition: transform .15s; }
+.switch-row[aria-checked=true] .track { background: var(--sand); }
+.switch-row[aria-checked=true] .track::after { transform: translateX(20px); background: var(--ink); }
+.switch-row:disabled { opacity: 1; cursor: default; }
+.switch-row:disabled .track { opacity: .55; }
+
 /* 게임 */
-.topbar { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; }
+.topbar { display: flex; flex-wrap: wrap; gap: 0 10px; justify-content: space-between; align-items: baseline; font-size: 14px; }
 .stage { position: relative; min-height: 280px; display: grid; place-items: center; text-align: center; margin: 8px 0 4px; }
 .prompt { font-family: var(--font-display); font-size: clamp(140px, 42vw, 220px); line-height: 1; color: var(--paper); margin: 0; }
 .prompt.count { color: var(--sand); }
@@ -125,7 +138,27 @@ a { color: var(--sand); }
 
 /* 종료 */
 .result { text-align: center; padding: 24px 0 8px; }
-.result .prompt { font-size: clamp(72px, 24vw, 120px); color: var(--stamp); }
+.result .prompt { font-size: clamp(72px, 24vw, 120px); color: var(--stamp); overflow-wrap: anywhere; }
+.result .prompt.long { font-size: clamp(36px, 11vw, 64px); line-height: 1.15; }
+/* 결과표: 좁은 화면에서도 가로로 넘치지 않게 열 너비를 고정하고, 표 영역만 세로로 스크롤한다 */
+.board { min-width: 0; }
+.board h2 { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 14px; font-weight: 700; margin: 8px 0; }
+.board h2 span { font-weight: 400; }
+.ranks .rank { flex: none; width: 2.4em; font-family: var(--font-display); color: var(--paper-dim); }
+.ranks li.leader .rank { color: var(--stamp); }
+.ranks .name { min-width: 0; overflow-wrap: anywhere; }
+.ranks .score { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; }
+.table-scroll { max-height: min(46vh, 340px); overflow-x: hidden; overflow-y: auto; background: var(--ink-2); border-radius: var(--radius); }
+.sheet { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px; }
+.sheet th, .sheet td { padding: 8px 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.sheet thead th { position: sticky; top: 0; background: var(--ink-3); font-size: 12px; font-weight: 500; color: var(--paper-dim); }
+.sheet tbody tr + tr td { border-top: 1px solid rgba(247,243,232,.1); }
+.sheet .c-round { width: 56px; }
+.sheet .c-prompt { width: 56px; }
+.sheet .c-count { width: 64px; }
+.sheet .num { text-align: right; font-variant-numeric: tabular-nums; }
+.sheet td.ch { font-weight: 700; color: var(--sand); }
+.sheet tr.none td { color: var(--paper-dim); }
 .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--sand); color: var(--ink); font-weight: 700; }
 .toast { position: fixed; left: 16px; right: 16px; bottom: 24px; margin: 0 auto; max-width: 420px; background: var(--paper); color: var(--ink);
   padding: 12px 16px; border-radius: var(--radius); text-align: center; font-weight: 500; opacity: 0; transform: translateY(8px); transition: .2s; }
@@ -134,6 +167,7 @@ a { color: var(--sand); }
   .stampmark span { animation: none; transform: rotate(-12deg); opacity: 1; }
   .timer.run b { transition: none; }
   .toast { transition: none; }
+  .switch-row .track, .switch-row .track::after { transition: none; }
 }
 </style>
 </head>
@@ -180,15 +214,23 @@ a { color: var(--sand); }
       <button type="button" data-len="3" role="radio" aria-checked="false">세글자</button>
     </div>
     <p class="mode-note" id="mode-note">2글자 이상이면 어떤 길이든 인정됩니다</p>
+    <button type="button" class="switch-row" id="dup-toggle" role="switch" aria-checked="false" disabled>
+      <span class="switch-text">
+        <span>중복 단어 허용</span>
+        <span class="switch-note" id="dup-note">한 판에서 같은 단어는 한 번만 인정됩니다</span>
+      </span>
+      <span class="switch-state" id="dup-state">불가</span>
+      <span class="track" aria-hidden="true"></span>
+    </button>
   </div>
   <button type="button" id="btn-start" disabled>2명 이상 모이면 시작할 수 있어요</button>
-  <p class="muted small">규칙: 한글 2글자 이상의 명사만 인정됩니다. 한 판에서 같은 단어는 한 번만. 틀리면 1초 쉬어야 합니다.</p>
+  <p class="muted small">규칙: 한글 2글자 이상의 명사만 인정됩니다. <span id="rule-dup">한 판에서 같은 단어는 한 번만.</span> 틀리면 1초 쉬어야 합니다.</p>
 </section>
 
 <!-- 3. 게임 -->
 <section id="screen-game" class="screen">
   <div class="topbar">
-    <span><span id="game-round">1</span>번째 제시어 <span class="muted" id="game-mode"></span></span>
+    <span><span id="game-round">1</span>번째 제시어 <span class="muted" id="game-mode"></span> <span class="muted" id="game-dup"></span></span>
     <span class="muted" id="game-code"></span>
   </div>
   <div class="stage">
@@ -204,7 +246,7 @@ a { color: var(--sand); }
   <div class="winner-line" id="winner-line"></div>
   <ul class="players" id="game-players"></ul>
   <div class="used" id="used" hidden>
-    <span class="muted small">이미 나온 단어</span>
+    <span class="muted small" id="used-label">이미 나온 단어</span>
     <ul id="used-list"></ul>
   </div>
 </section>
@@ -215,7 +257,28 @@ a { color: var(--sand); }
     <p class="muted">우승</p>
     <p class="prompt" id="over-winner">—</p>
   </div>
-  <ul class="players" id="over-players"></ul>
+  <section class="board" aria-labelledby="over-ranks-title">
+    <h2 id="over-ranks-title">최종 순위</h2>
+    <ol class="players ranks" id="over-players"></ol>
+  </section>
+  <section class="board" aria-labelledby="over-history-title">
+    <h2 id="over-history-title">라운드 기록 <span class="muted small" id="over-rule"></span></h2>
+    <div class="table-scroll" role="region" aria-labelledby="over-history-title" tabindex="0">
+      <table class="sheet">
+        <thead><tr><th scope="col" class="c-round num">라운드</th><th scope="col" class="c-prompt">제시어</th><th scope="col">정답 단어</th><th scope="col">맞힌 사람</th></tr></thead>
+        <tbody id="over-history"></tbody>
+      </table>
+    </div>
+  </section>
+  <section class="board" id="over-counts-box" aria-labelledby="over-counts-title" hidden>
+    <h2 id="over-counts-title">단어별 사용 횟수</h2>
+    <div class="table-scroll" role="region" aria-labelledby="over-counts-title" tabindex="0">
+      <table class="sheet">
+        <thead><tr><th scope="col">단어</th><th scope="col" class="c-count num">횟수</th></tr></thead>
+        <tbody id="over-counts"></tbody>
+      </table>
+    </div>
+  </section>
   <button type="button" class="stamp" id="btn-restart" hidden>한 판 더</button>
   <p class="muted small" id="over-note">방장이 다시 시작하면 같은 방에서 이어서 놀 수 있어요.</p>
 </section>
@@ -234,7 +297,7 @@ a { color: var(--sand); }
   const loadSession = () => { try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null'); } catch { return null; } };
   const saveSession = (s) => { try { s ? sessionStorage.setItem(SESSION_KEY, JSON.stringify(s)) : sessionStorage.removeItem(SESSION_KEY); } catch {} };
 
-  let ws = null, me = null, room = null, roundSeconds = 20, cooldownTimer = null, reconnectTimer = null;
+  let ws = null, me = null, room = null, roundSeconds = 20, cooldownTimer = null, reconnectTimer = null, overTimer = null;
   let pendingAction = null; // 연결되면 보낼 첫 메시지
   // 답 입력창 잠금 상태. disabled는 포커스를 빼앗아 모바일 키보드가 닫히므로 readonly로만 잠근다.
   let roundOpen = false, cooling = false, composing = false, clearAfterComposition = false;
@@ -296,6 +359,9 @@ a { color: var(--sand); }
     $('btn-start').textContent = !ready ? '2명 이상 모이면 시작할 수 있어요' : isHost ? '게임 시작' : '방장이 시작하길 기다리는 중';
     $('game-round').textContent = s.round || 1;
     renderMode(s.word_length || 0, isHost);
+    renderDup(!!s.allow_duplicates, isHost);
+    // 결과표는 room_state(game_over)만으로 그린다. 새로고침·재접속해도 같은 표가 나온다.
+    if (s.phase === 'game_over') renderOver(s); else clearOver();
 
     if (s.phase === 'lobby') show('lobby');
     else if (s.phase === 'game_over') show('over');
@@ -319,6 +385,15 @@ a { color: var(--sand); }
     $('mode-note').textContent = MODE_NOTES[len] + (isHost ? '' : ' · 방장이 고릅니다');
     $('game-mode').textContent = len ? `· ${len === 2 ? '두글자' : '세글자'} 모드` : '';
     $('word').placeholder = len === 2 ? '두 글자 단어' : len === 3 ? '세 글자 단어' : '이 글자로 시작하는 단어';
+  }
+  function renderDup(allow, isHost) {
+    const b = $('dup-toggle');
+    b.setAttribute('aria-checked', String(allow)); b.disabled = !isHost;
+    $('dup-state').textContent = allow ? '허용' : '불가';
+    $('dup-note').textContent = (allow ? '이미 나온 단어를 다시 내도 득점합니다' : '한 판에서 같은 단어는 한 번만 인정됩니다') + (isHost ? '' : ' · 방장이 고릅니다');
+    $('rule-dup').textContent = allow ? '이미 나온 단어도 다시 낼 수 있습니다.' : '한 판에서 같은 단어는 한 번만.';
+    $('game-dup').textContent = allow ? '· 중복 허용' : '· 중복 불가';
+    $('used-label').textContent = allow ? '이미 나온 단어 · 다시 내도 됩니다' : '이미 나온 단어';
   }
   function renderPlayers(ul, players, hostId, target) {
     const top = Math.max(...players.map(p => p.score), 0);
@@ -355,7 +430,8 @@ a { color: var(--sand); }
       $('stamp-word').textContent = m.word; const sm = $('stampmark'); sm.hidden = false; sm.querySelector('span').style.animation = 'none'; void sm.offsetWidth; sm.querySelector('span').style.animation = '';
       $('winner-line').innerHTML = `<strong>${esc(w?.nickname || '누군가')}</strong> 득점 · ${esc(m.word)}`;
       $('hint').textContent = '';
-      if (room) { room.used_words = [...(room.used_words || []), m.word]; renderUsed(room.used_words); }
+      // 중복 허용 모드에서는 같은 단어가 또 정답이 될 수 있다. 목록에는 한 번만 싣는다.
+      if (room && !(room.used_words || []).includes(m.word)) { room.used_words = [...(room.used_words || []), m.word]; renderUsed(room.used_words); }
     } else {
       $('winner-line').textContent = '아무도 맞히지 못했어요';
       $('hint').textContent = '';
@@ -363,12 +439,47 @@ a { color: var(--sand); }
     if (m.players && room) { room.players = m.players; renderPlayers($('game-players'), m.players, room.host_id, room.target_score); }
   }
   function onGameOver(m) {
-    const w = m.players.find(p => p.id === m.winner_id);
-    $('over-winner').textContent = w?.nickname || '—';
-    if (room) { room.players = m.players; renderPlayers($('over-players'), m.players, room.host_id, room.target_score); }
-    const isHost = room?.host_id === me?.id;
+    if (!room) return;
+    // game_over 메시지를 room_state(game_over)와 같은 모양으로 합쳐 같은 함수로 그린다
+    Object.assign(room, { phase: 'game_over', players: m.players, allow_duplicates: !!m.allow_duplicates, history: m.history, word_counts: m.word_counts });
+    renderOver(room);
+    // 마지막 득점 도장을 잠깐 보여 준 뒤 넘어간다. 그 사이 로비로 돌아갔으면 넘기지 않는다.
+    clearTimeout(overTimer);
+    overTimer = setTimeout(() => { if (room?.phase === 'game_over') show('over'); }, 1400);
+  }
+  // 종료 화면: 우승자 · 최종 순위 · 라운드 기록 · (중복 허용일 때만) 단어별 사용 횟수
+  function renderOver(s) {
+    const history = s.history || [], last = history[history.length - 1];
+    // 게임은 목표 점수에 닿은 득점으로 끝나므로 마지막 라운드를 맞힌 사람이 우승자다
+    const ranked = [...s.players].sort((a, b) => b.score - a.score);
+    const champ = last?.winner_name || ranked[0]?.nickname || '—';
+    const w = $('over-winner'); w.textContent = champ; w.classList.toggle('long', [...champ].length > 3);
+    $('over-players').innerHTML = ranked.map(p => {
+      const rank = 1 + ranked.filter(q => q.score > p.score).length; // 동점은 같은 순위
+      return `
+      <li class="${p.connected ? '' : 'gone'} ${rank === 1 ? 'leader' : ''}">
+        <span class="rank">${rank}위</span>
+        <span class="name">${esc(p.nickname)}${p.id === me?.id ? ' <span class="muted small">(나)</span>' : ''}</span>
+        ${p.connected ? '' : '<span class="muted small">나감</span>'}
+        <span class="score">${p.score}점</span>
+      </li>`;
+    }).join('');
+    $('over-rule').textContent = `${history.length}라운드 · 중복 ${s.allow_duplicates ? '허용' : '불가'}`;
+    $('over-history').innerHTML = history.map(h => h.word
+      ? `<tr><td class="num">${h.round}</td><td class="ch">${esc(h.prompt)}</td><td>${esc(h.word)}</td><td>${esc(h.winner_name || '누군가')}</td></tr>`
+      : `<tr class="none"><td class="num">${h.round}</td><td class="ch">${esc(h.prompt)}</td><td>정답 없음</td><td>—</td></tr>`).join('');
+    // 허용 모드가 아니면 모든 횟수가 1이라 표를 숨긴다
+    $('over-counts-box').hidden = !s.allow_duplicates;
+    $('over-counts').innerHTML = s.allow_duplicates
+      ? (s.word_counts || []).map(c => `<tr><td>${esc(c.word)}</td><td class="num">${c.count}회</td></tr>`).join('') : '';
+    const isHost = s.host_id === me?.id;
     $('btn-restart').hidden = !isHost; $('over-note').hidden = isHost;
-    setTimeout(() => show('over'), 1400);
+  }
+  function clearOver() {
+    clearTimeout(overTimer);
+    $('over-winner').textContent = '—';
+    ['over-players', 'over-history', 'over-counts'].forEach(id => { $(id).innerHTML = ''; });
+    $('over-rule').textContent = ''; $('over-counts-box').hidden = true;
   }
   function onSubmitResult(m) {
     const f = $('feedback');
@@ -421,6 +532,7 @@ a { color: var(--sand); }
   });
   $('btn-start').addEventListener('click', () => send({ type: 'start_game' }));
   $('modes').addEventListener('click', (e) => { const b = e.target.closest('button[data-len]'); if (b && !b.disabled) send({ type: 'set_mode', word_length: Number(b.dataset.len) }); });
+  $('dup-toggle').addEventListener('click', () => { if (room) send({ type: 'set_allow_duplicates', allow_duplicates: !room.allow_duplicates }); });
   $('btn-restart').addEventListener('click', () => send({ type: 'restart_game' }));
   $('answer-form').addEventListener('submit', (e) => {
     e.preventDefault(); if (!roundOpen || cooling) return;
