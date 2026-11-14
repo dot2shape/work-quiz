@@ -23,6 +23,7 @@ scripts/dict/       load.mjs(단어 목록 → D1 적재), smoke.mjs(실행 중�
 src/prompts.ts      제시어 음절 목록과 추출기
 src/hangul.ts       한글 형식 검증
 data/seed_words.txt API 키가 없을 때 쓰는 로컬 사전
+data/dict/          유행어 허용 목록(slang.txt)·비속어 차단 목록(banned.txt) 원본과 선정 기준(README.md)
 public/index.html   클라이언트
 test/               vitest 테스트 (D1 은 miniflare 의 실제 D1 로 돌린다. fixture: test/fixtures/dict-words.csv)
 docs/screenshots/   README 플레이 캡처
@@ -80,12 +81,15 @@ npm run tail                                # 실시간 로그
 - **폴백**: 바인딩이 없거나, 마이그레이션 전이거나, 인정 단어가 0 이거나, 초기화가 2초 안에 끝나지 않으면 그 방은 기존 경로(stdict → 시드)로만 판정합니다. 게임 중 D1 조회가 실패하면 그 제출은 기존 경로로 판정하고, 2회 연속 실패하면 60초 동안 D1 을 건너뜁니다. 오류 판정은 캐시하지 않습니다. 읽어 둔 차단 목록은 D1 이 죽어도 계속 적용됩니다.
 - 제시어: D1 과 기존 경로의 제시어 집합을 합칩니다(D1 이 일부만 적재된 동안 제시어가 좁아지지 않게).
 
-적재는 `scripts/dict/load.mjs` 로만 합니다(`--help` 참고). 텍스트(한 줄에 한 단어 이상, `--kind` 필수) 또는 CSV(`word,kind,source,pos`)를 SQL 배치 파일로 바꿔 `wrangler d1 execute --file` 로 넣고, `prompt_syllables`·`dict_stats` 를 다시 계산합니다.
+적재는 `scripts/dict/load.mjs` 로만 합니다(`--help` 참고). 텍스트(한 줄에 한 단어 이상. 종류는 파일 안의 `# kind: <종류>` 줄 또는 `--kind`) 또는 CSV(`word,kind,source,pos`)를 SQL 배치 파일로 바꿔 `wrangler d1 execute --file` 로 넣고, `prompt_syllables`·`dict_stats` 를 다시 계산합니다.
+
+유행어 허용 목록과 비속어 차단 목록의 원본은 `data/dict/slang.txt`·`data/dict/banned.txt` 입니다(선정 기준은 `data/dict/README.md`). 두 파일은 **항상 함께** 적재합니다. 같은 단어가 양쪽에 있으면 스크립트가 경고하고, 판정은 차단이 우선합니다.
 
 ```bash
-node scripts/dict/load.mjs <파일> --kind banned --source banned --replace --dry-run   # SQL 만 만들어 확인 (.wrangler/dict-load/)
-node scripts/dict/load.mjs <파일> --kind banned --source banned --replace --remote    # 운영 적재
-node scripts/dict/load.mjs --recalc-only --remote                                      # 집계만 다시
+node scripts/dict/load.mjs data/dict/slang.txt data/dict/banned.txt --replace --dry-run   # SQL 만 만들어 건수·경고 확인 (.wrangler/dict-load/)
+node scripts/dict/load.mjs data/dict/slang.txt data/dict/banned.txt --replace --local     # 로컬 D1
+node scripts/dict/load.mjs data/dict/slang.txt data/dict/banned.txt --replace --remote    # 운영 적재
+node scripts/dict/load.mjs --recalc-only --remote                                          # 집계만 다시
 ```
 
 - `--replace` 는 이번에 넣는 `(kind, source)` 의 기존 행을 먼저 지웁니다(삭제와 첫 삽입은 같은 SQL 파일). 목록 파일을 원본으로 삼을 때 씁니다. 같은 kind 의 두 출처에 모두 있는 단어는 나중에 적재한 출처로 표시됩니다.
