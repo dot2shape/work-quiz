@@ -36,6 +36,7 @@ const HELP = `단어 목록을 D1 단어 DB(words)에 적재한다.
   --source <이름>      출처 표시 (기본: 파일 이름)
   --format <text|csv>  입력 형식 강제
   --replace            이번에 적재하는 (kind, source) 의 기존 행을 먼저 지운다 (목록 파일을 원본으로 맞출 때)
+                       같은 kind 의 두 출처에 모두 있는 단어는 나중에 적재한 출처로 표시된다
   --recalc-only        단어는 넣지 않고 prompt_syllables·dict_stats 만 다시 계산한다
   --local              로컬 D1 (wrangler dev 용, .wrangler/state)
   --remote             운영 D1
@@ -97,7 +98,7 @@ export function parseWords(text, options) {
 
   text.split(/\r?\n/).forEach((rawLine, index) => {
     const lineNo = index + 1;
-    const line = rawLine.replace(/^﻿/, "").trim();
+    const line = rawLine.replace(/^\uFEFF/, "").trim();
     if (!line || line.startsWith("#")) return;
     if (format === "text") {
       for (const token of line.split(/\s+/)) push(lineNo, token, kind, source, null);
@@ -116,6 +117,13 @@ export function parseWords(text, options) {
     push(lineNo, cell("word"), cell("kind") || kind, cell("source") || source, cell("pos"));
   });
   return { rows, skipped };
+}
+
+/** 여러 파일의 파싱 결과를 한 배열로 모은다(수십만 행에서도 안전하게 — 전개 연산자로 push 하지 않는다). */
+export function collectRows(parsedList) {
+  const rows = [];
+  for (const parsed of parsedList) for (const row of parsed.rows) rows.push(row);
+  return rows;
 }
 
 /** 같은 (kind, word) 는 뒤에 나온 행이 이긴다. */
@@ -159,6 +167,7 @@ export function recalcSql() {
  * @param {WordRow[]} rows
  * @param {{ replace?: boolean, rowsPerFile?: number, rowsPerStatement?: number }} [options]
  * @returns {{ name: string, sql: string }[]} 실행 순서대로. 마지막은 항상 재계산 파일이다.
+ *   replace 의 DELETE 는 첫 삽입 파일 맨 앞에 둔다: 따로 실행하면 그 사이 목록(특히 차단 목록)이 비어 버린다.
  */
 export function buildSqlFiles(rows, options = {}) {
   const { replace = false, rowsPerFile = 50_000, rowsPerStatement = 200 } = options;
@@ -166,20 +175,22 @@ export function buildSqlFiles(rows, options = {}) {
   const files = [];
   const pad = (n) => String(n).padStart(4, "0");
 
-  if (replace && unique.length) {
+  const deletes = [];
+  if (replace) {
     const pairs = new Map();
     for (const row of unique) pairs.set(`${row.kind}\u0000${row.source ?? ""}`, row);
-    const deletes = [...pairs.values()].map((row) =>
-      row.source === null
-        ? `DELETE FROM words WHERE kind = ${q(row.kind)} AND source IS NULL;`
-        : `DELETE FROM words WHERE kind = ${q(row.kind)} AND source = ${q(row.source)};`,
-    );
-    files.push({ name: `${pad(0)}-replace.sql`, sql: `${deletes.join("\n")}\n` });
+    for (const row of pairs.values()) {
+      deletes.push(
+        row.source === null
+          ? `DELETE FROM words WHERE kind = ${q(row.kind)} AND source IS NULL;`
+          : `DELETE FROM words WHERE kind = ${q(row.kind)} AND source = ${q(row.source)};`,
+      );
+    }
   }
 
   for (let start = 0, fileNo = 1; start < unique.length; start += rowsPerFile, fileNo++) {
     const chunk = unique.slice(start, start + rowsPerFile);
-    const statements = [];
+    const statements = fileNo === 1 ? [...deletes] : [];
     for (let i = 0; i < chunk.length; i += rowsPerStatement) {
       const values = chunk
         .slice(i, i + rowsPerStatement)
@@ -269,7 +280,7 @@ function main(argv) {
     return EXIT_OK;
   }
 
-  const rows = [];
+  const parsedList = [];
   for (const file of opts.files) {
     let text;
     try {
@@ -290,11 +301,12 @@ function main(argv) {
       console.error(`오류: ${file}: ${err.message}`);
       return EXIT_INPUT;
     }
-    rows.push(...parsed.rows);
+    parsedList.push(parsed);
     console.error(`${file}: ${parsed.rows.length}행 읽음, ${parsed.skipped.length}건 건너뜀`);
     for (const s of parsed.skipped.slice(0, 10)) console.error(`  건너뜀 ${s.line}행 '${s.value}': ${s.why}`);
     if (parsed.skipped.length > 10) console.error(`  ... 외 ${parsed.skipped.length - 10}건`);
   }
+  const rows = collectRows(parsedList);
   if (!opts.recalcOnly && !rows.length) {
     console.error("오류: 적재할 단어가 없습니다");
     return EXIT_INPUT;
@@ -308,7 +320,7 @@ function main(argv) {
   const outDir = resolve(opts.out);
   mkdirSync(outDir, { recursive: true });
   for (const old of readdirSync(outDir)) {
-    if (/^\d{4}-(replace|words|recalc)\.sql$/.test(old)) rmSync(join(outDir, old)); // 이전 실행이 남긴 배치만 지운다
+    if (/^\d{4}-(words|recalc)\.sql$/.test(old)) rmSync(join(outDir, old)); // 이전 실행이 남긴 배치만 지운다
   }
   const paths = files.map((file) => {
     const path = join(outDir, file.name);
@@ -331,7 +343,7 @@ function main(argv) {
     if (result.stdout) process.stderr.write(result.stdout); // stdout 은 파일 목록 전용
     if (result.stderr) process.stderr.write(result.stderr);
     if (result.error || result.status !== 0) {
-      console.error(`오류: wrangler d1 execute 실패 (${path}) — 이 파일부터 다시 실행하면 된다(INSERT 는 덮어쓰기)`);
+      console.error(`오류: wrangler d1 execute 실패 (${path}) — 같은 명령을 다시 실행하면 된다(INSERT 는 덮어쓰기)`);
       return EXIT_WRANGLER;
     }
   }

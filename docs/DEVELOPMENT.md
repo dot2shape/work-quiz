@@ -88,7 +88,8 @@ node scripts/dict/load.mjs <파일> --kind banned --source banned --replace --re
 node scripts/dict/load.mjs --recalc-only --remote                                      # 집계만 다시
 ```
 
-- `--replace` 는 이번에 넣는 `(kind, source)` 의 기존 행을 먼저 지웁니다. 목록 파일을 원본으로 삼을 때 씁니다.
+- `--replace` 는 이번에 넣는 `(kind, source)` 의 기존 행을 먼저 지웁니다(삭제와 첫 삽입은 같은 SQL 파일). 목록 파일을 원본으로 삼을 때 씁니다. 같은 kind 의 두 출처에 모두 있는 단어는 나중에 적재한 출처로 표시됩니다.
+- D1 무료 플랜은 하루에 쓸 수 있는 행 수에 한도가 있습니다. 수십만 행을 넣기 전에 계정 플랜과 한도를 확인합니다.
 - 운영 적재 중에는 D1 이 잠시 응답하지 않을 수 있습니다. 그동안은 위 폴백으로 판정합니다.
 - 종료 코드: 0 성공 / 1 입력 오류 / 2 사용법 오류 / 3 wrangler 실행 실패.
 

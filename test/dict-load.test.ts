@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSqlFiles, isHangulWord, normalizeWord, parseArgs, parseWords, recalcSql, UsageError } from "../scripts/dict/load.mjs";
+import { buildSqlFiles, collectRows, isHangulWord, normalizeWord, parseArgs, parseWords, recalcSql, UsageError } from "../scripts/dict/load.mjs";
 import { isHangulWord as srcIsHangulWord, normalize as srcNormalize } from "../src/hangul";
 import fixture from "./fixtures/dict-words.csv?raw";
 
@@ -72,12 +72,28 @@ describe("적재 스크립트 — SQL 생성", () => {
     expect(buildSqlFiles(rows)[0].sql).toContain("'it''s'");
   });
 
-  it("--replace 면 적재하는 (kind, source) 의 기존 행을 먼저 지운다", () => {
-    const files = buildSqlFiles(rows, { replace: true });
-    expect(files[0].name).toBe("0000-replace.sql");
-    expect(files[0].sql).toContain("DELETE FROM words WHERE kind = 'standard' AND source = 's';");
+  it("--replace 면 적재하는 (kind, source) 의 기존 행을 지우되, 삭제와 첫 삽입을 같은 파일에 둔다", () => {
+    // 따로 실행되면 그 사이(또는 삽입 실패 시 계속) 차단 목록이 비어 버린다
+    const files = buildSqlFiles(rows, { replace: true, rowsPerFile: 2 });
+    expect(files.map((f) => f.name)).toEqual(["0001-words.sql", "0002-words.sql", "9999-recalc.sql"]);
+    expect(files[0].sql).toContain("DELETE FROM words WHERE kind = 'standard' AND source = 's2';");
     expect(files[0].sql).toContain("DELETE FROM words WHERE kind = 'banned' AND source = 'it''s';");
+    expect(files[0].sql.indexOf("DELETE FROM words")).toBeLessThan(files[0].sql.indexOf("INSERT INTO words"));
+    expect(files[1].sql).not.toContain("DELETE");
     expect(files[0].sql).not.toMatch(/DELETE FROM words;/);
+  });
+
+  it("50만 행도 처리한다", () => {
+    const syl = "가나다라마바사아자차카타파하거너더러머버서어저처";
+    const lines: string[] = [];
+    for (let i = 0; i < 500_000; i++) {
+      lines.push(syl[i % 24] + syl[Math.floor(i / 24) % 24] + syl[Math.floor(i / 576) % 24] + syl[Math.floor(i / 13824) % 24]);
+    }
+    const sources = [lines.slice(0, 250_000).join("\n"), lines.slice(250_000).join("\n")];
+    const rows = collectRows(sources.map((text) => parseWords(text, { format: "text", kind: "standard", source: "big" })));
+    expect(rows.length).toBe(500_000);
+    const files = buildSqlFiles(rows, { rowsPerFile: 100_000 });
+    expect(files.length).toBe(4 + 1); // 중복 제거 후 24^4 = 331,776행 → 4파일 + 재계산
   });
 
   it("단어가 없으면 재계산 파일만 만든다 (--recalc-only)", () => {

@@ -178,7 +178,7 @@ describe("FallbackDictionary — 방 간 브레이커 공유 (#18)", () => {
     await roomA.isNoun("저녁");
     expect(roomA.status).toBe("stdict-degraded");
     const flag = kv.puts.find((p) => p.key === "breaker:stdict");
-    expect(flag?.ttl).toBeGreaterThanOrEqual(60); // KV 최소 TTL
+    expect(flag?.ttl).toBe(60);
 
     const primaryB = failing();
     const roomB = new FallbackDictionary(primaryB, local, opts);
@@ -191,6 +191,13 @@ describe("FallbackDictionary — 방 간 브레이커 공유 (#18)", () => {
     now += 60_000; // 쿨다운 경과 → 다시 시도
     await roomB.isNoun("저녁");
     expect(primaryB.calls.length).toBe(1);
+  });
+
+  it("쿨다운이 60초보다 짧아도 플래그 TTL 은 KV 최솟값(60초) 이상이다", async () => {
+    const kv = new TtlKv(() => 0);
+    const dict = new FallbackDictionary(failing(), local, { failureThreshold: 1, cooldownMs: 10_000, now: () => 0, shared: kv });
+    await dict.isNoun("저녁");
+    expect(kv.puts.map((p) => p.ttl)).toEqual([60]);
   });
 
   it("이미 떠 있는 방도 주기적으로 플래그를 확인한다", async () => {
@@ -253,6 +260,15 @@ describe("StdictClient 실패 로그 마스킹 (#18)", () => {
     expect(out).not.toContain("SECRETKEY");
     const other = await logsFor(`${"y".repeat(100)} certkey=ABCDEFGHIJKLMNOPQRSTUVWXYZ&`);
     expect(other).not.toContain("ABCDEFGH");
+  });
+
+  it("키가 여러 번 나와 가린 뒤 뒤쪽 내용이 앞으로 당겨져도 키 조각을 남기지 않는다", async () => {
+    const key = "SECRETKEY1234567890";
+    // 앞의 키가 가려지며 줄어든 만큼, 120자 밖에 있던 두 번째 키가 로그 범위 안으로 들어온다
+    const twice = await logsFor(`{"error":"bad key ${key}","detail":"${"x".repeat(78)}","apiKey":"${key}"}`);
+    expect(twice).not.toContain("SECRET");
+    const shifted = await logsFor(`certkey=${"Z".repeat(60)}&${"w".repeat(50)} token:${key} tail`);
+    expect(shifted).not.toContain("SECRET");
   });
 });
 

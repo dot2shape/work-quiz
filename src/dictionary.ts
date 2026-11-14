@@ -81,8 +81,8 @@ export class StdictClient implements Dictionary {
       });
       status = resp.status;
       const body = await resp.text();
-      // 키가 120자 경계에 걸쳐 일부만 남지 않도록 넉넉히 잘라 가린 뒤 줄인다.
-      head = maskKey(body.slice(0, 120 + this.apiKey.length), this.apiKey).slice(0, 120);
+      // 본문 전체에서 키를 가린 뒤 자른다(먼저 자르면 경계에 걸린 키 조각이 남는다).
+      head = maskKey(body, this.apiKey).slice(0, 120);
       if (!resp.ok) throw new StdictFailure("http");
       // 키가 틀리거나 없으면 stdict는 HTTP 200 + 빈 본문을 돌려준다(2026-11-08 #9 확인).
       if (!body.trim()) throw new StdictFailure("empty");

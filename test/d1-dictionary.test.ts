@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { D1Dictionary, D1Health, LOOKUP_SQL, loadD1Snapshot, readD1Stats } from "../src/d1-dictionary";
-import { REASON_BANNED, REASON_NOT_FOUND } from "../src/dictionary";
+import { CachedDictionary, REASON_BANNED, REASON_NOT_FOUND } from "../src/dictionary";
 import { createDatabases, load, loadFixture, migrate, runSql } from "./helpers/d1";
 
 const SNAPSHOT_OPTS = { lengths: [0, 2, 3], syllables: ["가", "나", "사", "바", "하"] };
@@ -103,6 +103,22 @@ describe("D1Dictionary", () => {
     expect((await new D1Dictionary(dbs.bare).isNoun("가방")).error).toBe(true);
     expect((await new D1Dictionary(brokenDb("throw")).isNoun("가방")).error).toBe(true);
     expect((await new D1Dictionary(brokenDb("hang"), new Map(), 20).isNoun("가방")).error).toBe(true);
+  });
+
+  it("오류 판정은 메모리에 캐시되지 않는다: D1 이 회복되면 같은 단어를 다시 조회한다", async () => {
+    let calls = 0;
+    const flaky = {
+      prepare: (sql: string) => ({
+        bind: (word: string) => ({
+          all: () => (++calls === 1 ? Promise.reject(new Error("D1_ERROR: boom")) : dbs.full.prepare(sql).bind(word).all()),
+        }),
+      }),
+    } as unknown as D1Database;
+    const cached = new CachedDictionary(new D1Dictionary(flaky), null);
+    expect((await cached.isNoun("가방")).error).toBe(true);
+    expect(await cached.isNoun("가방")).toEqual({ valid: true });
+    await cached.isNoun("가방");
+    expect(calls).toBe(2); // 정상 판정은 캐시된다
   });
 
   it("promptSyllables 는 미리 읽어 둔 메모리 값을 동기 반환한다", async () => {
