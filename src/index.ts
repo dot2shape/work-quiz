@@ -4,6 +4,7 @@
  * 클라이언트는 `/ws` (새 방) 또는 `/ws?code=ABC234` (기존 방) 로 접속한 뒤
  * 첫 메시지로 create_room / join_room 을 보낸다(원본 프로토콜 그대로).
  */
+import { D1Health, type D1Report } from "./d1-dictionary";
 import { StdictClient, StdictHealth } from "./dictionary";
 import { type Env, generateCode, normalizeCode } from "./env";
 
@@ -19,6 +20,27 @@ async function dictionaryStatus(env: Env): Promise<string> {
   if (!key) return "local";
   if (health?.key !== key) health = { key, probe: new StdictHealth(new StdictClient(key)) };
   return health.probe.status();
+}
+
+let d1Health: D1Health | null = null;
+
+/** 자체 단어 DB 상태와 kind 별 단어 수(60초 캐시). */
+async function d1Report(env: Env): Promise<D1Report> {
+  if (!d1Health || d1Health.db !== env.DICT_DB) d1Health = new D1Health(env.DICT_DB);
+  return d1Health.report();
+}
+
+/**
+ * `dictionary`: 지금 판정에 쓰는 사전. D1 에 인정 단어가 있으면 "d1", 아니면 기존 값(local|stdict|stdict-degraded).
+ * `d1`: 단어 DB 상태(unbound|error|empty|ready)와 단어 수. `fallback`: D1 에 없는 단어를 판정하는 기존 경로.
+ */
+async function healthz(env: Env): Promise<Response> {
+  const [base, d1] = await Promise.all([dictionaryStatus(env), d1Report(env)]);
+  const body =
+    d1.status === "ready"
+      ? { ok: true, dictionary: "d1", runtime: "cloudflare", d1, fallback: base }
+      : { ok: true, dictionary: base, runtime: "cloudflare", d1 };
+  return Response.json(body);
 }
 
 async function pickFreeCode(env: Env): Promise<string> {
@@ -57,9 +79,7 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/ws") return handleWebSocket(request, env);
-    if (url.pathname === "/healthz") {
-      return Response.json({ ok: true, dictionary: await dictionaryStatus(env), runtime: "cloudflare" });
-    }
+    if (url.pathname === "/healthz") return healthz(env);
     return env.ASSETS.fetch(request);
   },
 } satisfies ExportedHandler<Env>;

@@ -1,0 +1,37 @@
+# 테스트·로컬 확인용 소형 단어 목록 (#12). 실제 차단·유행어 목록은 #13, 사전 덤프는 #14 에서 적재한다.
+# banned 는 구조 확인용으로 고른 순한 낱말이며 실제 차단 기준이 아니다.
+word,kind,source,pos
+가방,standard,fixture,명사
+가족,standard,fixture,명사
+가을,standard,fixture,명사
+가로등,standard,fixture,명사
+가능성,standard,fixture,명사
+가식,standard,fixture,명사
+나무,standard,fixture,명사
+나비,standard,fixture,명사
+나라,standard,fixture,명사
+나들이,standard,fixture,명사
+나부랭이,standard,fixture,명사
+사과,standard,fixture,명사
+사람,standard,fixture,명사
+사랑,standard,fixture,명사
+사자,standard,fixture,명사
+사다리,standard,fixture,명사
+사기꾼,standard,fixture,명사
+바다,standard,fixture,명사
+바람,standard,fixture,명사
+바지,standard,fixture,명사
+바나나,standard,fixture,명사
+바구니,standard,fixture,명사
+바보,standard,fixture,명사
+가성비,slang,fixture,
+가심비,slang,fixture,
+나심비,slang,fixture,
+사바사,slang,fixture,
+바프,slang,fixture,
+갓생,slang,fixture,
+가식,banned,fixture,
+나부랭이,banned,fixture,
+사기꾼,banned,fixture,
+바보,banned,fixture,
+멍청이,banned,fixture,
