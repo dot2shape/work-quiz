@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { buildSqlFiles, collectRows, isHangulWord, normalizeWord, parseArgs, parseWords, recalcSql, UsageError } from "../scripts/dict/load.mjs";
+import {
+  buildSqlFiles,
+  collectRows,
+  findDuplicates,
+  findKindConflicts,
+  isHangulWord,
+  loadWarnings,
+  normalizeWord,
+  parseArgs,
+  parseWords,
+  recalcSql,
+  UsageError,
+} from "../scripts/dict/load.mjs";
 import { isHangulWord as srcIsHangulWord, normalize as srcNormalize } from "../src/hangul";
 import fixture from "./fixtures/dict-words.csv?raw";
 
@@ -117,5 +129,58 @@ describe("적재 스크립트 — 옵션", () => {
     expect(() => parseArgs(["a.txt", "--remote", "--persist-to", "x"])).toThrow(UsageError);
     expect(parseArgs(["--recalc-only", "--remote"]).recalcOnly).toBe(true);
     expect(parseArgs(["--help"]).help).toBe(true);
+  });
+});
+
+describe("적재 스크립트 — 텍스트 파일의 kind 지시문 (#13)", () => {
+  it("'# kind: <종류>' 줄이 있으면 --kind 없이도 그 종류로 읽는다", () => {
+    const { rows, skipped } = parseWords("# 설명\n# kind: banned\n바보\n멍청이\n", { format: "text", source: "banned.txt" });
+    expect(rows).toEqual([
+      { word: "바보", kind: "banned", source: "banned.txt", pos: null },
+      { word: "멍청이", kind: "banned", source: "banned.txt", pos: null },
+    ]);
+    expect(skipped).toEqual([]);
+  });
+
+  it("지시문과 --kind 가 다르면 사용법 오류다 (차단 목록을 유행어로 적재하는 사고 방지)", () => {
+    expect(() => parseWords("# kind: banned\n바보\n", { format: "text", kind: "slang" })).toThrow(UsageError);
+    expect(parseWords("# kind: banned\n바보\n", { format: "text", kind: "banned" }).rows).toHaveLength(1);
+  });
+
+  it("지시문 값이 틀리면 오류다", () => {
+    expect(() => parseWords("# kind: noun\n바보\n", { format: "text" })).toThrow(/kind/);
+    expect(() => parseWords("# kind: slang (유행어)\n갓생\n", { format: "text" })).toThrow(/kind/);
+  });
+
+  it("지시문도 --kind 도 없는 텍스트는 사용법 오류다", () => {
+    expect(() => parseWords("갓생\n", { format: "text" })).toThrow(UsageError);
+    expect(parseWords("# 주석만\n", { format: "text" }).rows).toEqual([]);
+  });
+
+  it("'kind' 로 시작하는 보통 주석은 지시문이 아니다", () => {
+    expect(parseWords("# kinds of words\n갓생\n", { format: "text", kind: "slang" }).rows).toHaveLength(1);
+  });
+});
+
+describe("적재 스크립트 — 겹침 경고 (#13)", () => {
+  const row = (word: string, kind: string) => ({ word, kind, source: null, pos: null });
+
+  it("slang 과 banned 에 모두 있는 단어를 찾는다 (standard 와 banned 겹침은 정상이라 제외)", () => {
+    const rows = [row("갓생", "slang"), row("바보", "slang"), row("바보", "banned"), row("가식", "standard"), row("가식", "banned"), row("나쁜말", "banned"), row("나쁜말", "slang")];
+    expect(findKindConflicts(rows)).toEqual(["나쁜말", "바보"]);
+    expect(findKindConflicts([row("갓생", "slang"), row("바보", "banned")])).toEqual([]);
+  });
+
+  it("같은 kind 안에서 두 번 나온 단어를 찾는다", () => {
+    const rows = [row("갓생", "slang"), row("갓생", "slang"), row("갓생", "slang"), row("바보", "banned"), row("바보", "slang")];
+    expect(findDuplicates(rows)).toEqual([{ kind: "slang", word: "갓생", count: 3 }]);
+  });
+
+  it("경고 문구: 겹침은 banned 우선임을 알리고, 겹침이 없으면 경고가 없다", () => {
+    const warnings = loadWarnings([row("바보", "slang"), row("바보", "banned"), row("갓생", "slang"), row("갓생", "slang")]);
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toMatch(/^경고: slang 과 banned 에 모두 있는 단어 1개.*banned 우선.*바보/);
+    expect(warnings[1]).toMatch(/^경고: 같은 kind 안에서 중복된 단어 1개.*갓생\(slang ×2\)/);
+    expect(loadWarnings([row("갓생", "slang"), row("바보", "banned")])).toEqual([]);
   });
 });

@@ -13,7 +13,8 @@ import { readFileSync } from "node:fs";
 import { parseWords } from "./load.mjs";
 
 const HELP = `사용법: node scripts/dict/smoke.mjs --expect <d1|seed> [--url http://localhost:8787] [--rooms 6] [--timeout 240]
-  --fixture <csv>  D1 에 적재한 목록 (기본: test/fixtures/dict-words.csv)
+  --fixture <파일[,파일...]>  D1 에 적재한 목록. CSV 또는 '# kind:' 지시문이 있는 텍스트 (기본: test/fixtures/dict-words.csv)
+                   예: --fixture data/dict/slang.txt,data/dict/banned.txt
   --seed <txt>     시드 목록 (기본: data/seed_words.txt)
 서버는 TARGET_SCORE 를 크게 띄우면 빨리 끝난다: npx wrangler dev --var TARGET_SCORE:1000
 `;
@@ -91,7 +92,9 @@ async function main() {
   }
   if (opts.help) return process.stdout.write(HELP), 0;
 
-  const fixture = parseWords(readFileSync(opts.fixture, "utf8"), { format: "csv" }).rows;
+  const fixture = opts.fixture
+    .split(",")
+    .flatMap((file) => parseWords(readFileSync(file, "utf8"), { format: file.toLowerCase().endsWith(".csv") ? "csv" : "text" }).rows);
   const seed = parseWords(readFileSync(opts.seed, "utf8"), { format: "text", kind: "standard" }).rows.map((r) => r.word);
   const banned = new Set(fixture.filter((r) => r.kind === "banned").map((r) => r.word));
   const slang = fixture.filter((r) => r.kind === "slang" && !banned.has(r.word)).map((r) => r.word);

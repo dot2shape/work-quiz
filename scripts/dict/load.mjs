@@ -3,7 +3,7 @@
  * 단어 목록(텍스트/CSV) → SQL 배치 파일 → `wrangler d1 execute --file` 로 D1(words)에 적재한다.
  * 적재 뒤 prompt_syllables(길이별 첫 음절 단어 수)와 dict_stats(kind 별 단어 수)를 다시 계산한다.
  *
- * 순수 함수(parseWords, buildSqlFiles, recalcSql, parseArgs)는 테스트에서 import 한다.
+ * 순수 함수(parseWords, buildSqlFiles, recalcSql, parseArgs, loadWarnings)는 테스트에서 import 한다.
  */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -22,11 +22,12 @@ export const EXIT_WRANGLER = 3; // wrangler d1 execute 실패
 const HELP = `단어 목록을 D1 단어 DB(words)에 적재한다.
 
 사용법
-  node scripts/dict/load.mjs <파일...> --kind <종류> (--local | --remote | --dry-run) [옵션]
+  node scripts/dict/load.mjs <파일...> [--kind <종류>] (--local | --remote | --dry-run) [옵션]
   node scripts/dict/load.mjs --recalc-only (--local | --remote | --dry-run)
 
 입력 형식 (확장자로 구분, --format 으로 강제 가능)
-  .txt   한 줄에 한 단어 이상(공백 구분). '#' 으로 시작하는 줄은 주석. --kind 필수
+  .txt   한 줄에 한 단어 이상(공백 구분). '#' 으로 시작하는 줄은 주석.
+         종류는 파일 안의 '# kind: <종류>' 줄(지시문) 또는 --kind 로 정한다. 둘이 다르면 오류
   .csv   머리글 줄 word[,kind][,source][,pos]. kind 열이 없거나 비면 --kind 를 쓴다
          (따옴표·필드 안 쉼표는 지원하지 않는다)
   표제어 표기('-', '^', 공백)는 지우고, 한글 2글자 이상이 아닌 항목은 건너뛴다.
@@ -51,12 +52,17 @@ const HELP = `단어 목록을 D1 단어 DB(words)에 적재한다.
   stdout  만든 SQL 파일 경로(한 줄에 하나)
   stderr  진행 상황, 건너뛴 항목, wrangler 출력
 
+경고 (stderr, 종료 코드는 바꾸지 않는다)
+  같은 단어가 slang 과 banned 에 모두 있으면 경고한다. 판정은 banned 가 우선한다(차단).
+  한 번에 읽은 파일끼리만 비교하므로 유행어·차단 목록은 함께 적재한다.
+
 종료 코드
   0 성공 · 1 입력 오류(파일 없음·적재할 단어 없음) · 2 사용법 오류 · 3 wrangler 실행 실패
 
 예
   node scripts/dict/load.mjs test/fixtures/dict-words.csv --local
-  node scripts/dict/load.mjs data/dict/banned.txt --kind banned --source banned --replace --remote
+  node scripts/dict/load.mjs data/dict/slang.txt data/dict/banned.txt --replace --dry-run
+  node scripts/dict/load.mjs data/dict/slang.txt data/dict/banned.txt --replace --remote
 `;
 
 // ── 한글 검증 (src/hangul.ts 와 같은 규칙. test/dict-load.test.ts 가 일치를 확인한다) ──
@@ -71,12 +77,20 @@ export function isHangulWord(word, minLen = 2) {
 
 // ── 입력 파싱 ───────────────────────────────────────────────────
 
+/** 텍스트 파일의 종류 지시문: `# kind: slang` */
+const KIND_DIRECTIVE = /^#\s*kind\s*:(.*)$/i;
+
+export class UsageError extends Error {}
+
 /**
  * @typedef {{ word: string, kind: string, source: string | null, pos: string | null }} WordRow
  * @typedef {{ line: number, value: string, why: string }} Skipped
  */
 
 /**
+ * 텍스트 형식은 '# kind: <종류>' 줄(지시문)로 파일이 자기 종류를 밝힐 수 있다. 지시문은 그 아래 줄에 적용된다.
+ * 지시문과 options.kind 가 다르면 UsageError — 차단 목록을 유행어로 적재하는 사고를 막는다.
+ *
  * @param {string} text
  * @param {{ format: "text" | "csv", kind?: string | null, source?: string | null }} options
  * @returns {{ rows: WordRow[], skipped: Skipped[] }}
@@ -88,6 +102,7 @@ export function parseWords(text, options) {
   /** @type {Skipped[]} */
   const skipped = [];
   let header = null;
+  let textKind = kind; // 텍스트 형식에서 지금 줄에 적용되는 종류
 
   const push = (line, rawWord, rowKind, rowSource, pos) => {
     const word = normalizeWord(rawWord);
@@ -99,9 +114,20 @@ export function parseWords(text, options) {
   text.split(/\r?\n/).forEach((rawLine, index) => {
     const lineNo = index + 1;
     const line = rawLine.replace(/^\uFEFF/, "").trim();
+    if (format === "text") {
+      const directive = KIND_DIRECTIVE.exec(line);
+      if (directive) {
+        const value = directive[1].trim();
+        if (!KINDS.includes(value)) throw new Error(`${lineNo}행: kind 지시문은 ${KINDS.join("|")} 중 하나여야 합니다: '${value}'`);
+        if (kind && kind !== value) throw new UsageError(`${lineNo}행: 파일의 kind 지시문(${value})과 --kind(${kind})가 다릅니다`);
+        textKind = value;
+        return;
+      }
+    }
     if (!line || line.startsWith("#")) return;
     if (format === "text") {
-      for (const token of line.split(/\s+/)) push(lineNo, token, kind, source, null);
+      if (!textKind) throw new UsageError("텍스트 파일에는 --kind 또는 파일 안의 '# kind: <종류>' 줄이 필요합니다");
+      for (const token of line.split(/\s+/)) push(lineNo, token, textKind, source, null);
       return;
     }
     const cells = line.split(",").map((c) => c.trim());
@@ -131,6 +157,46 @@ export function dedupe(rows) {
   const map = new Map();
   for (const row of rows) map.set(`${row.kind}\u0000${row.word}`, row);
   return [...map.values()];
+}
+
+// ── 겹침 경고 ───────────────────────────────────────────────────
+
+/** slang 과 banned 에 모두 있는 단어(가나다순). standard 와 banned 의 겹침은 정상(사전 명사를 차단)이라 보지 않는다. */
+export function findKindConflicts(rows) {
+  const slang = new Set();
+  const banned = new Set();
+  for (const row of rows) {
+    if (row.kind === "slang") slang.add(row.word);
+    else if (row.kind === "banned") banned.add(row.word);
+  }
+  return [...slang].filter((word) => banned.has(word)).sort();
+}
+
+/** 같은 kind 안에서 두 번 이상 나온 단어. @returns {{ kind: string, word: string, count: number }[]} */
+export function findDuplicates(rows) {
+  const counts = new Map();
+  for (const row of rows) {
+    const key = `${row.kind}\u0000${row.word}`;
+    const entry = counts.get(key);
+    if (entry) entry.count += 1;
+    else counts.set(key, { kind: row.kind, word: row.word, count: 1 });
+  }
+  return [...counts.values()].filter((entry) => entry.count > 1);
+}
+
+/** 적재 전에 stderr 로 알릴 경고 문구. 적재는 그대로 진행한다(판정은 banned 우선, 중복은 한 번만 적재). */
+export function loadWarnings(rows, limit = 20) {
+  const list = (items) => items.slice(0, limit).join(", ") + (items.length > limit ? ` ... 외 ${items.length - limit}개` : "");
+  const warnings = [];
+  const conflicts = findKindConflicts(rows);
+  if (conflicts.length) {
+    warnings.push(`경고: slang 과 banned 에 모두 있는 단어 ${conflicts.length}개 — banned 우선(차단됩니다). 유행어 목록에서 지우세요: ${list(conflicts)}`);
+  }
+  const duplicates = findDuplicates(rows);
+  if (duplicates.length) {
+    warnings.push(`경고: 같은 kind 안에서 중복된 단어 ${duplicates.length}개 — 한 번만 적재합니다: ${list(duplicates.map((d) => `${d.word}(${d.kind} ×${d.count})`))}`);
+  }
+  return warnings;
 }
 
 // ── SQL 생성 ────────────────────────────────────────────────────
@@ -208,8 +274,6 @@ export function buildSqlFiles(rows, options = {}) {
 }
 
 // ── CLI ─────────────────────────────────────────────────────────
-
-export class UsageError extends Error {}
 
 /** @param {string[]} argv */
 export function parseArgs(argv) {
@@ -290,16 +354,12 @@ function main(argv) {
       return EXIT_INPUT;
     }
     const format = formatOf(file, opts.format);
-    if (format === "text" && !opts.kind) {
-      console.error(`오류: 텍스트 파일(${file})에는 --kind 가 필요합니다`);
-      return EXIT_USAGE;
-    }
     let parsed;
     try {
       parsed = parseWords(text, { format, kind: opts.kind, source: opts.source ?? basename(file) });
     } catch (err) {
       console.error(`오류: ${file}: ${err.message}`);
-      return EXIT_INPUT;
+      return err instanceof UsageError ? EXIT_USAGE : EXIT_INPUT;
     }
     parsedList.push(parsed);
     console.error(`${file}: ${parsed.rows.length}행 읽음, ${parsed.skipped.length}건 건너뜀`);
@@ -316,6 +376,7 @@ function main(argv) {
   const counts = Object.fromEntries(KINDS.map((k) => [k, 0]));
   for (const row of dedupe(rows)) counts[row.kind] += 1;
   console.error(`적재 대상(중복 제거 후): ${KINDS.map((k) => `${k} ${counts[k]}`).join(", ")}`);
+  for (const warning of loadWarnings(rows)) console.error(warning);
 
   const outDir = resolve(opts.out);
   mkdirSync(outDir, { recursive: true });
