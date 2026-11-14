@@ -4,7 +4,9 @@
  * - StdictClient      : 국립국어원 표준국어대사전 오픈 API 호출
  * - CachedDictionary  : 메모리 + KV 캐시 (오류 결과는 캐시하지 않음)
  * - LocalDictionary   : 로컬 시드 단어 목록 (API 키가 없을 때 개발용)
- * - FallbackDictionary: 주 사전 조회 실패 시 로컬 사전으로 판정 + 서킷 브레이커
+ * - FallbackDictionary: 주 사전 조회 실패 시 로컬 사전으로 판정 + 서킷 브레이커(방 간 공유)
+ * - TieredDictionary  : 자체 DB(D1) → 없거나 조회 오류면 기존 경로
+ * - BlocklistDictionary: 어떤 사전이든 판정 앞에서 차단 단어를 거절
  */
 import { normalize } from "./hangul";
 
@@ -13,6 +15,7 @@ export const STDICT_URL = "https://stdict.korean.go.kr/api/search.do";
 export const REASON_NOT_FOUND = "사전에 없는 단어입니다";
 export const REASON_NOT_NOUN = "명사가 아닙니다";
 export const REASON_LOOKUP_FAILED = "사전 조회에 실패했습니다. 다시 제출해 주세요";
+export const REASON_BANNED = "사용할 수 없는 단어입니다";
 
 export interface Verdict {
   valid: boolean;
@@ -35,6 +38,12 @@ class StdictFailure extends Error {
     super(kind);
     this.name = "StdictFailure";
   }
+}
+
+/** 로그에 남길 응답 본문에서 API 키(`key=...` 꼴과 키 값 자체)를 가린다. */
+export function maskKey(text: string, apiKey = ""): string {
+  const masked = apiKey ? text.split(apiKey).join("***") : text;
+  return masked.replace(/key=[^&\s"'<>]*/gi, "key=***");
 }
 
 interface StdictItem {
@@ -72,7 +81,8 @@ export class StdictClient implements Dictionary {
       });
       status = resp.status;
       const body = await resp.text();
-      head = body.slice(0, 120);
+      // 키가 120자 경계에 걸쳐 일부만 남지 않도록 넉넉히 잘라 가린 뒤 줄인다.
+      head = maskKey(body.slice(0, 120 + this.apiKey.length), this.apiKey).slice(0, 120);
       if (!resp.ok) throw new StdictFailure("http");
       // 키가 틀리거나 없으면 stdict는 HTTP 200 + 빈 본문을 돌려준다(2026-11-08 #9 확인).
       if (!body.trim()) throw new StdictFailure("empty");
@@ -113,7 +123,7 @@ export class StdictClient implements Dictionary {
 /** KV 바인딩 중 캐시에 필요한 부분만 추상화한다(테스트용 가짜 구현을 쉽게 만들기 위해). */
 export interface KvLike {
   get(key: string): Promise<string | null>;
-  put(key: string, value: string): Promise<void>;
+  put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
 }
 
 /** 내부 사전 결과를 메모리에 캐시하고 선택적으로 KV에 저장한다. */
@@ -129,7 +139,8 @@ export class CachedDictionary implements Dictionary {
     this.name = inner.name;
   }
 
-  async isNoun(word: string): Promise<Verdict> {
+  /** 캐시(메모리 → KV)에 있는 판정만 돌려준다. 내부 사전은 부르지 않는다. */
+  async peek(word: string): Promise<Verdict | null> {
     const hit = this.memory.get(word);
     if (hit) {
       this.memory.delete(word);
@@ -148,6 +159,12 @@ export class CachedDictionary implements Dictionary {
         console.warn("KV 캐시 조회 실패", word, String(err));
       }
     }
+    return null;
+  }
+
+  async isNoun(word: string): Promise<Verdict> {
+    const cached = await this.peek(word);
+    if (cached) return cached;
     const verdict = await this.inner.isNoun(word);
     if (!verdict.error) {
       this.remember(word, verdict);
@@ -213,26 +230,78 @@ export class LocalDictionary implements Dictionary {
 
 export type DictionaryStatus = "stdict" | "stdict-degraded";
 
+/** 연속 실패 시 cooldown 동안 주 경로를 건너뛰게 하는 서킷 브레이커. */
+export class CircuitBreaker {
+  private failures = 0;
+  private openUntil = 0;
+
+  constructor(
+    readonly threshold = 2,
+    readonly cooldownMs = 60_000,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** 연속 실패가 임계값에 닿았다(쿨다운이 지나 다시 시도하는 반열림 포함). */
+  get tripped(): boolean {
+    return this.failures >= this.threshold;
+  }
+
+  /** 지금은 주 경로를 건너뛰어야 한다. */
+  get open(): boolean {
+    return this.tripped && this.now() < this.openUntil;
+  }
+
+  success(): void {
+    this.failures = 0;
+    this.openUntil = 0;
+  }
+
+  /** 실패를 기록한다. 이 실패로 열렸으면(또는 다시 열렸으면) 열려 있을 시각, 아니면 null. */
+  failure(): number | null {
+    this.failures += 1;
+    if (!this.tripped) return null;
+    this.openUntil = this.now() + this.cooldownMs;
+    return this.openUntil;
+  }
+
+  /** 다른 곳에서 알려 준 차단 상태를 반영한다. */
+  tripUntil(until: number): void {
+    this.failures = Math.max(this.failures, this.threshold);
+    this.openUntil = Math.max(this.openUntil, until);
+  }
+}
+
 export interface FallbackOptions {
   /** 이 횟수만큼 연속 실패하면 차단(open)한다. */
   failureThreshold?: number;
   /** 차단 후 주 사전을 다시 시도하기까지의 시간. */
   cooldownMs?: number;
   now?: () => number;
+  /** 차단 상태를 방(DO) 간에 공유할 KV. 없으면 방별로만 동작한다. */
+  shared?: KvLike | null;
+  sharedKey?: string;
+  /** 이미 떠 있는 방이 공유 플래그를 다시 확인하는 최소 간격. */
+  sharedCheckMs?: number;
 }
+
+/** KV expirationTtl 의 최솟값(초). */
+const KV_MIN_TTL_SECONDS = 60;
 
 /**
  * 주 사전(stdict) 조회가 실패(`error: true`)하면 거절 대신 로컬 사전으로 판정한다.
  * 연속 실패 시 cooldown 동안 주 사전 호출을 건너뛰어 제출마다 타임아웃을 기다리지 않게 한다.
+ * - 차단 상태는 KV 플래그(`shared`)로 방 간에 공유한다: 새 방이 같은 실패를 다시 겪지 않는다.
+ * - 차단 중에도 주 사전의 캐시(KV)에 남은 판정은 먼저 쓰고, 없을 때만 로컬 사전으로 판정한다.
  * 폴백 판정은 주 사전 바깥에서 만들어지므로 CachedDictionary(KV)에 저장되지 않는다.
  */
 export class FallbackDictionary implements Dictionary {
   readonly name: string;
-  private failures = 0;
-  private openUntil = 0;
-  private readonly failureThreshold: number;
-  private readonly cooldownMs: number;
+  private readonly breaker: CircuitBreaker;
   private readonly now: () => number;
+  private readonly shared: KvLike | null;
+  private readonly sharedKey: string;
+  private readonly sharedCheckMs: number;
+  private sharedCheckedAt = Number.NEGATIVE_INFINITY;
 
   constructor(
     readonly primary: Dictionary,
@@ -240,37 +309,142 @@ export class FallbackDictionary implements Dictionary {
     options: FallbackOptions = {},
   ) {
     this.name = primary.name;
-    this.failureThreshold = options.failureThreshold ?? 2;
-    this.cooldownMs = options.cooldownMs ?? 60_000;
     this.now = options.now ?? Date.now;
+    this.breaker = new CircuitBreaker(options.failureThreshold ?? 2, options.cooldownMs ?? 60_000, this.now);
+    this.shared = options.shared ?? null;
+    this.sharedKey = options.sharedKey ?? "breaker:stdict";
+    this.sharedCheckMs = options.sharedCheckMs ?? 30_000;
   }
 
   get status(): DictionaryStatus {
-    return this.failures >= this.failureThreshold ? "stdict-degraded" : "stdict";
+    return this.breaker.tripped ? "stdict-degraded" : "stdict";
+  }
+
+  /** 다른 방이 남긴 차단 플래그를 읽어 반영한다. DO 초기화 때 한 번, 이후에는 sharedCheckMs 간격으로만 읽는다. */
+  async syncShared(): Promise<void> {
+    if (!this.shared || this.breaker.open) return;
+    const now = this.now();
+    if (now - this.sharedCheckedAt < this.sharedCheckMs) return;
+    this.sharedCheckedAt = now;
+    try {
+      const until = Number(await this.shared.get(this.sharedKey));
+      if (Number.isFinite(until) && until > now) this.breaker.tripUntil(until);
+    } catch (err) {
+      console.warn("차단 플래그 조회 실패", String(err));
+    }
   }
 
   async isNoun(word: string): Promise<Verdict> {
-    if (this.failures >= this.failureThreshold && this.now() < this.openUntil) {
-      return this.fallback.isNoun(word);
-    }
+    await this.syncShared();
+    if (this.breaker.open) return this.whileOpen(word);
     const verdict = await this.primary.isNoun(word);
     if (!verdict.error) {
-      this.failures = 0;
-      this.openUntil = 0;
+      this.breaker.success();
       return verdict;
     }
-    this.failures += 1;
-    if (this.failures >= this.failureThreshold) {
-      if (this.failures === this.failureThreshold) console.warn("stdict 차단: 로컬 사전으로 폴백", this.cooldownMs);
-      this.openUntil = this.now() + this.cooldownMs;
+    const wasTripped = this.breaker.tripped;
+    const openUntil = this.breaker.failure();
+    if (openUntil !== null) {
+      if (!wasTripped) console.warn("stdict 차단: 로컬 사전으로 폴백", this.breaker.cooldownMs);
+      await this.publish(openUntil);
     }
     return this.fallback.isNoun(word);
+  }
+
+  /** 차단 중: 주 사전의 캐시에 남은 판정이 있으면 그것을, 없으면 로컬 사전을 쓴다. */
+  private async whileOpen(word: string): Promise<Verdict> {
+    const peek = (this.primary as { peek?: (word: string) => Promise<Verdict | null> }).peek;
+    const cached = peek ? await peek.call(this.primary, word) : null;
+    return cached ?? this.fallback.isNoun(word);
+  }
+
+  private async publish(openUntil: number): Promise<void> {
+    if (!this.shared) return;
+    try {
+      const ttl = Math.max(KV_MIN_TTL_SECONDS, Math.ceil(this.breaker.cooldownMs / 1000));
+      await this.shared.put(this.sharedKey, String(openUntil), { expirationTtl: ttl });
+    } catch (err) {
+      console.warn("차단 플래그 저장 실패", String(err));
+    }
   }
 
   promptSyllables(wordLength: number): Set<string> | null {
     return this.status === "stdict-degraded"
       ? this.fallback.promptSyllables(wordLength)
       : this.primary.promptSyllables(wordLength);
+  }
+}
+
+export interface TieredOptions {
+  /** true 면 주 사전에 없는 단어를 다음 사전에 묻지 않고 바로 거절한다(조회 오류는 여전히 넘긴다). */
+  strict?: boolean;
+  breaker?: CircuitBreaker;
+}
+
+/**
+ * 자체 DB(주 사전) → 기존 경로(다음 사전) 순으로 판정한다.
+ * - 주 사전이 인정하거나 차단하면 그 판정으로 끝낸다.
+ * - 주 사전에 없으면 다음 사전에 묻는다(자체 DB 적재가 덜 된 동안의 기본 동작).
+ * - 주 사전 조회 오류는 플레이어에게 보이지 않게 다음 사전으로 판정하고, 연속 오류면 잠시 건너뛴다.
+ */
+export class TieredDictionary implements Dictionary {
+  readonly name: string;
+  private readonly strict: boolean;
+  private readonly breaker: CircuitBreaker;
+
+  constructor(
+    readonly primary: Dictionary,
+    readonly secondary: Dictionary,
+    options: TieredOptions = {},
+  ) {
+    this.name = primary.name;
+    this.strict = options.strict ?? false;
+    this.breaker = options.breaker ?? new CircuitBreaker();
+  }
+
+  async isNoun(word: string): Promise<Verdict> {
+    if (!this.breaker.open) {
+      const verdict = await this.primary.isNoun(word);
+      if (!verdict.error) {
+        this.breaker.success();
+        if (verdict.valid || verdict.reason === REASON_BANNED || this.strict) return verdict;
+      } else {
+        const wasTripped = this.breaker.tripped;
+        if (this.breaker.failure() !== null && !wasTripped) {
+          console.warn(`${this.primary.name} 차단: ${this.secondary.name} 사전으로 폴백`, this.breaker.cooldownMs);
+        }
+      }
+    }
+    return this.secondary.isNoun(word);
+  }
+
+  promptSyllables(wordLength: number): Set<string> | null {
+    const own = this.breaker.tripped ? null : this.primary.promptSyllables(wordLength);
+    if (this.strict && own) return own;
+    const rest = this.secondary.promptSyllables(wordLength);
+    if (rest === null) return null; // 다음 사전이 모든 음절을 받는다
+    return own ? new Set([...own, ...rest]) : rest;
+  }
+}
+
+/** 어떤 사전이든 판정 앞에서 차단 단어를 거절한다. 거절은 오류가 아니므로 쿨다운 대상이다. */
+export class BlocklistDictionary implements Dictionary {
+  readonly name: string;
+
+  constructor(
+    readonly inner: Dictionary,
+    private readonly banned: ReadonlySet<string>,
+  ) {
+    this.name = inner.name;
+  }
+
+  async isNoun(word: string): Promise<Verdict> {
+    if (this.banned.has(word)) return { valid: false, reason: REASON_BANNED };
+    return this.inner.isNoun(word);
+  }
+
+  promptSyllables(wordLength: number): Set<string> | null {
+    return this.inner.promptSyllables(wordLength);
   }
 }
 

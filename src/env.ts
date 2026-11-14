@@ -4,6 +4,8 @@ import type { SettingsEnv } from "./settings";
 export interface Env extends SettingsEnv {
   ROOMS: DurableObjectNamespace;
   DICT_CACHE: KVNamespace;
+  /** 자체 단어 DB(D1). 바인딩이 없거나 비어 있으면 기존 경로(stdict → 시드)로 판정한다. */
+  DICT_DB?: D1Database;
   ASSETS: Fetcher;
   /** `wrangler secret put STDICT_API_KEY` 로만 설정한다. 없으면 로컬 사전 모드. */
   STDICT_API_KEY?: string;

@@ -34,6 +34,14 @@ new_sqlite_classes = ["RoomObject"]
 binding = "DICT_CACHE"
 id = "2eea3ac3bc70412ba15685a898aabdb5"
 
+# 자체 단어 DB (#12). 비어 있거나 조회에 실패하면 기존 경로(stdict → 시드)로 판정한다.
+# 스키마: `npx wrangler d1 migrations apply word-rush-dict --remote` (배포보다 먼저)
+[[d1_databases]]
+binding = "DICT_DB"
+database_name = "word-rush-dict"
+database_id = "bcb4cd59-6f83-4fdb-b4bc-7d9b46b1ffcc"
+migrations_dir = "migrations"
+
 # 게임 규칙 기본값. STDICT_API_KEY 는 `wrangler secret put STDICT_API_KEY` 로만 넣는다.
 [vars]
 TARGET_SCORE = "5"
