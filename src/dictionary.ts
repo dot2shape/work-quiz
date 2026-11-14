@@ -48,7 +48,8 @@ export class StdictClient implements Dictionary {
 
   constructor(
     private readonly apiKey: string,
-    private readonly fetchImpl: Fetch = fetch,
+    // 전역 fetch 를 필드에 담아 this.fetchImpl(...) 로 부르면 Workers 에서 Illegal invocation 이 난다(#19).
+    private readonly fetchImpl: Fetch = (input, init) => fetch(input, init),
     private readonly timeoutMs = 3000,
   ) {}
 
