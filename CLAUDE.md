@@ -2,11 +2,11 @@
 
 제시어 한 음절로 시작하는 표준국어대사전 명사를 가장 먼저 제출하면 득점하는 실시간 멀티플레이 웹 게임.
 
-- 스택: TypeScript · Cloudflare Workers(`src/index.ts`) + Durable Objects(`RoomObject`, 방 1개 = DO 1개, WebSocket) + KV(`DICT_CACHE`, 사전 판정 캐시)
+- 스택: TypeScript · Cloudflare Workers(`src/index.ts`) + Durable Objects(`RoomObject`, 방 1개 = DO 1개, WebSocket) + KV(`DICT_CACHE`, 사전 판정 캐시) + D1(`DICT_DB` = `word-rush-dict`, 자체 단어 DB)
 - 클라이언트: 빌드 없는 `public/index.html` 단일 페이지 (Workers Assets)
-- 판정: 국립국어원 표준국어대사전 오픈 API(`STDICT_API_KEY` — 운영은 `wrangler secret`, 로컬은 `.dev.vars`) / 키 없으면 `data/seed_words.txt` 로컬 사전 모드
+- 판정: 차단 목록 → D1 단어 DB → (없으면) 국립국어원 표준국어대사전 오픈 API(`STDICT_API_KEY` — 운영은 `wrangler secret`, 로컬은 `.dev.vars`) → `data/seed_words.txt` 시드. D1 이 비었거나 실패하면 뒤의 경로만 쓴다. 적재는 `scripts/dict/load.mjs`
 - 설정: `wrangler.toml` (라우트 `quiz.ooo.codes/*`, 바인딩, `[vars]` 게임 규칙)
-- 실행: `npm ci` → `npm run dev`(localhost:8787) · `npm test`(vitest) · `npm run typecheck` · 배포 `npx wrangler deploy`
+- 실행: `npm ci` → `npm run dev`(localhost:8787) · `npm test`(vitest) · `npm run typecheck` · 배포 `npx wrangler d1 migrations apply word-rush-dict --remote`(새 마이그레이션이 있을 때 먼저) → `npx wrangler deploy`
 - 게임 소개는 `README.md`, 실행·배포·규칙 상세는 `docs/DEVELOPMENT.md`, 이전 설계는 `docs/superpowers/specs/2026-10-15-cloudflare-migration-design.md`
 
 ## 세션 구조 (PO → 워커)
