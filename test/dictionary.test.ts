@@ -6,6 +6,7 @@ import {
   type Dictionary,
   type KvLike,
   LocalDictionary,
+  REASON_LOOKUP_DELAYED,
   REASON_NOT_FOUND,
   REASON_NOT_NOUN,
   StdictClient,
@@ -176,11 +177,10 @@ describe("FallbackDictionary", () => {
   const local = new LocalDictionary(new Set(["저녁", "저울"]));
   const failing = () => new CountingDictionary({ valid: false, error: true, reason: "판정 불가" });
 
-  it("주 사전이 실패하면 로컬 사전으로 판정한다", async () => {
+  it("주 사전이 실패하면 로컬 사전에 있는 단어는 인정하고, 없으면 확정 거절 대신 재시도를 안내한다 (#24)", async () => {
     const dict = new FallbackDictionary(failing(), local);
     expect(await dict.isNoun("저녁")).toEqual({ valid: true });
-    expect((await dict.isNoun("저고리")).reason).toBe(REASON_NOT_FOUND);
-    expect((await dict.isNoun("저고리")).error).toBeFalsy();
+    expect(await dict.isNoun("저고리")).toEqual({ valid: false, reason: REASON_LOOKUP_DELAYED, error: true });
   });
 
   it("주 사전이 정상이면 그 결과를 그대로 쓴다", async () => {

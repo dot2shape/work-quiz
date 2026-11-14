@@ -8,6 +8,7 @@ import {
   type KvLike,
   LocalDictionary,
   REASON_BANNED,
+  REASON_LOOKUP_DELAYED,
   REASON_NOT_FOUND,
   StdictClient,
   TieredDictionary,
@@ -214,7 +215,7 @@ describe("FallbackDictionary — 방 간 브레이커 공유 (#18)", () => {
     await roomA.isNoun("저녁"); // 열림 → 플래그
 
     now += 30_000;
-    expect(await roomB.isNoun("저승")).toMatchObject({ valid: false, reason: REASON_NOT_FOUND }); // 시드 판정
+    expect(await roomB.isNoun("저승")).toMatchObject({ valid: false, reason: REASON_LOOKUP_DELAYED, error: true }); // 시드에 없음 → 재시도 안내(#24)
     expect(primaryB.calls.length).toBe(1);
   });
 
