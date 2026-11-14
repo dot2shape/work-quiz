@@ -132,6 +132,9 @@ export class RoomObject implements DurableObject {
         const length = Number.parseInt(String(msg.word_length ?? ""), 10);
         if (!Number.isFinite(length)) throw new RoomError("지원하지 않는 모드입니다");
         await this.room.setMode(att.player.id, length);
+      } else if (type === "set_allow_duplicates") {
+        if (typeof msg.allow_duplicates !== "boolean") throw new RoomError("지원하지 않는 설정입니다");
+        await this.room.setAllowDuplicates(att.player.id, msg.allow_duplicates);
       } else if (type === "ping") {
         this.reply(ws, { type: "pong" });
       } else {
