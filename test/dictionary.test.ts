@@ -35,6 +35,17 @@ describe("StdictClient", () => {
     expect(seen!.searchParams.get("req_type")).toBe("json");
   });
 
+  it("리다이렉트 없이 kdict 호스트의 검색 API 를 직접 부른다", async () => {
+    // stdict.korean.go.kr/api/search.do 는 2026-11 현재 kdict.korean.go.kr/standard/api/search.do 로 302 를 돌려준다.
+    let seen: URL | null = null;
+    const client = makeClient((url) => {
+      seen = url;
+      return stdictResponse([{ word: "사과", pos: "명사" }]);
+    });
+    await client.isNoun("사과");
+    expect(seen!.origin + seen!.pathname).toBe("https://kdict.korean.go.kr/standard/api/search.do");
+  });
+
   it("붙임표가 들어간 표제어도 매칭한다", async () => {
     const client = makeClient(() => stdictResponse([{ word: "부산-물", pos: "명사" }]));
     expect((await client.isNoun("부산물")).valid).toBe(true);

@@ -10,7 +10,8 @@
  */
 import { normalize } from "./hangul";
 
-export const STDICT_URL = "https://stdict.korean.go.kr/api/search.do";
+// 예전 주소(stdict.korean.go.kr/api/search.do)는 이 주소로 302 를 돌려준다(2026-11 확인). 왕복을 줄이려고 직접 부른다.
+export const STDICT_URL = "https://kdict.korean.go.kr/standard/api/search.do";
 
 export const REASON_NOT_FOUND = "사전에 없는 단어입니다";
 export const REASON_NOT_NOUN = "명사가 아닙니다";
